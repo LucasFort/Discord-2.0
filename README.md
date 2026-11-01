@@ -73,6 +73,15 @@ As tabelas são criadas sozinhas na primeira execução.
 
 Abra `https://SEU-APP.onrender.com/api/voice-config`. Precisa mostrar `"configured":true` e uma URL `wss://`. Erro "invalid token" quer dizer que a API Key e o API Secret não batem com o projeto da `LIVEKIT_URL`: gere uma chave nova no LiveKit e cole os 3 valores de novo em *nexo > Environment* no Render.
 
+### Site também na Vercel (link oficial)
+
+O site está publicado na Vercel (projeto `nexo`) e conversa com a API do Render acima.
+
+1. Na Vercel, em *Settings > Environment Variables* do projeto, crie `VITE_API_URL` com o endereço do Render (ex.: `https://nexo-xxxx.onrender.com`, sem barra no final).
+2. Refaça o deploy (*Deployments > Redeploy*). O valor entra no site na hora do build.
+
+A Vercel não mantém WebSocket aberto, por isso a API e o tempo real continuam no Render. O `web/vercel.json` faz os links `/convite/CODIGO` abrirem o app.
+
 ## Estrutura
 
 ```

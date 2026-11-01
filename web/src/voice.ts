@@ -29,10 +29,14 @@ let micCtx: AudioContext | null = null;
 /** O microfone só passa pelo processamento quando alguma opção precisa dele. */
 const needsMicProcessor = (s: Settings) => s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
 
-/** Volume final de cada pessoa: volume geral × volume dela (no máximo 100%). */
-function volumeFor(identity: string, deaf: boolean, s: Settings = getSettings()) {
+/**
+ * Volume final de cada áudio: volume geral × volume da pessoa (voz) ou da transmissão dela
+ * (áudio da tela), no máximo 100%. Assim dá para baixar o jogo/vídeo sem baixar a voz.
+ */
+function volumeFor(identity: string, source: Track.Source, deaf: boolean, s: Settings = getSettings()) {
   if (deaf) return 0;
-  return Math.min(1, (s.outputVolume / 100) * ((s.userVolumes[identity] ?? 100) / 100));
+  const own = source === Track.Source.ScreenShareAudio ? (s.streamVolumes[identity] ?? 100) : (s.userVolumes[identity] ?? 100);
+  return Math.min(1, (s.outputVolume / 100) * (own / 100));
 }
 import type { Gateway } from './store';
 
@@ -44,7 +48,7 @@ export const QUALITY: Record<ShareQuality, { label: string; width?: number; heig
   '720p30': { label: '720p · 30 fps', width: 1280, height: 720, fps: 30, bitrate: 2_000_000 },
   '1080p30': { label: '1080p · 30 fps', width: 1920, height: 1080, fps: 30, bitrate: 3_500_000 },
   '1080p60': { label: '1080p · 60 fps', width: 1920, height: 1080, fps: 60, bitrate: 6_000_000 },
-  source60: { label: 'Original · 60 fps', fps: 60, bitrate: 10_000_000 },
+  source60: { label: 'Nativa · 60 fps', fps: 60, bitrate: 10_000_000 },
 };
 
 export type VoiceUser = {
@@ -147,7 +151,7 @@ export function useVoice(gateway: Gateway) {
             }
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
-              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, deafRef.current));
+              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, deafRef.current));
             }
             rerender();
           })
@@ -267,7 +271,7 @@ export function useVoice(gateway: Gateway) {
 
   const applyVolumes = useCallback(() => {
     roomRef.current?.remoteParticipants.forEach((p) =>
-      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, deafRef.current))),
+      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, pub.source, deafRef.current))),
     );
   }, []);
 
@@ -346,7 +350,8 @@ export function useVoice(gateway: Gateway) {
       {
         audio: opts.audio,
         systemAudio: opts.audio ? 'include' : 'exclude',
-        resolution: q.width ? { width: q.width, height: q.height!, frameRate: q.fps } : undefined,
+        // Nativa: sem limite de tamanho (largura 0 = sem teto), só o fps.
+        resolution: { width: q.width ?? 0, height: q.height ?? 0, frameRate: q.fps },
         // Sempre "motion": com "detail" o Chrome trata como apresentação e, quando falta CPU ou
         // internet, pula quadros em vez de baixar a resolução, o que dá a sensação de travada.
         contentHint: 'motion',
@@ -365,6 +370,10 @@ export function useVoice(gateway: Gateway) {
         degradationPreference: opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate',
       },
     );
+    // O Chrome captura a tela a 30 fps se ninguém pedir mais. Pede os 60 fps direto na captura
+    // (vale também para a qualidade nativa, em que a resolução fica livre).
+    const screen = lp.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack;
+    if (screen && q.fps >= 60) await screen.applyConstraints({ frameRate: { ideal: 60, min: 30 } }).catch(() => {});
     rerender();
   };
 

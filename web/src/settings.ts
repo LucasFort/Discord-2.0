@@ -19,6 +19,7 @@ export type Settings = {
   autoSensitivity: boolean;
   sensitivity: number; // dB, -100 a 0
   userVolumes: Record<string, number>; // id do usuário -> 0–200 (%)
+  streamVolumes: Record<string, number>; // id de quem transmite -> 0–100 (%) do áudio da transmissão
 };
 
 const DEFAULTS: Settings = {
@@ -38,6 +39,7 @@ const DEFAULTS: Settings = {
   autoSensitivity: true,
   sensitivity: -50,
   userVolumes: {},
+  streamVolumes: {},
 };
 
 const KEY = 'nexo.settings';
