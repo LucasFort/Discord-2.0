@@ -2,15 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
-  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
+  Phone, PhoneOff, Plus, Users, UserCheck, UserX, MessageCircle, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
 } from 'lucide-react';
 import { api, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
-import { useToasts } from './toast';
+import { toast, useToasts } from './toast';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings } from './settings';
-import { useStore, type Gateway, type State } from './store';
+import { onGatewayEvent, useStore, type Gateway, type State } from './store';
 import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
 export function App() {
@@ -78,13 +78,43 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [view, setView] = useState<'text' | 'voice'>('text');
   const [sounds, setSounds] = useState(soundsEnabled);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const toggleSounds = () => {
-    setSoundsEnabled(!sounds);
-    setSounds(!sounds);
-    if (!sounds) playSound('join');
+  const incomingCount = Object.values(state.relationships).filter((r) => r.type === 'incoming').length;
+
+  const [dmId, setDmId] = useState<string | null>(null);
+  const servers = state.guilds.filter((g) => !g.is_dm);
+  const dms = state.guilds.filter((g) => g.is_dm);
+  const home = guildId === '@me' || (guildId === null && servers.length === 0);
+  const guild = home ? dms.find((g) => g.id === dmId) : servers.find((g) => g.id === guildId) ?? servers[0];
+  const dmPeer = (g?: Guild) => g?.members.find((m) => m.id !== state.user?.id);
+  const openDm = async (userId: string) => {
+    const g = await api<Guild>('POST', `/dms/${userId}`).catch((e) => (alert(e.message), null));
+    if (!g) return;
+    setGuildId('@me');
+    setDmId(g.id);
+    setView('text');
   };
 
-  const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
+  // Avisos: mensagem direta nova (fora da conversa aberta) e pedido de amizade.
+  const openRef = useRef<string | undefined>(undefined);
+  useEffect(
+    () =>
+      onGatewayEvent((e) => {
+        if (e.t === 'MESSAGE_CREATE' && e.d.author?.id !== state.user?.id) {
+          const g = state.guilds.find((x) => x.channels.some((c) => c.id === e.d.channel_id));
+          if (g?.is_dm && (openRef.current !== e.d.channel_id || document.hidden)) {
+            toast(`💬 ${e.d.author.display_name}: ${String(e.d.content).slice(0, 60)}`);
+            playSound('message');
+          }
+        }
+        if (e.t === 'RELATIONSHIP_ADD' && e.d.type === 'incoming') {
+          toast(`${e.d.user.display_name} quer ser seu amigo`, 'join');
+          playSound('message');
+        }
+        if (e.t === 'RELATIONSHIP_ADD' && e.d.type === 'friend' && state.relationships[e.d.user.id]?.type === 'outgoing')
+          toast(`${e.d.user.display_name} aceitou seu pedido de amizade`, 'join');
+      }),
+    [state.guilds, state.user?.id, state.relationships],
+  );
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
 
   useEffect(() => {
@@ -131,13 +161,22 @@ function Main({ onLogout }: { onLogout: () => void }) {
     if (code) setGuildId((await api<Guild>('POST', `/invites/${code}`).catch((e) => (alert(e.message), null)))?.id ?? guildId);
   };
 
-  const voiceChannel = guild?.channels.find((c) => c.id === voice.channelId);
+  const voiceGuild = state.guilds.find((g) => g.channels.some((c) => c.id === voice.channelId));
+  const voiceChannelName = voiceGuild?.is_dm
+    ? `Chamada com ${dmPeer(voiceGuild)?.display_name ?? ''}`
+    : voiceGuild?.channels.find((c) => c.id === voice.channelId)?.name ?? 'Voz';
+  openRef.current = view === 'text' ? textChannel?.id : undefined;
 
   return (
     <div className="app">
       <nav className="guilds">
-        {state.guilds.map((g) => (
-          <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
+        <button className={`guild home ${home ? 'active' : ''}`} title="Amigos e mensagens diretas" onClick={() => { setGuildId('@me'); setView('text'); }}>
+          <Users size={22} />
+          {incomingCount > 0 && <span className="guild-badge">{incomingCount}</span>}
+        </button>
+        <div className="guild-sep" />
+        {servers.map((g) => (
+          <button key={g.id} className={`guild ${!home && g.id === guild?.id ? 'active' : ''}`} title={g.name} onClick={() => { setGuildId(g.id); setView('text'); }}>
             {initials(g.name)}
           </button>
         ))}
@@ -147,7 +186,15 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </nav>
 
       <aside className="sidebar">
-        {guild ? (
+        {home ? (
+          <HomeSidebar
+            dms={dms}
+            state={state}
+            activeId={dmId}
+            onFriends={() => { setDmId(null); setView('text'); }}
+            onOpen={(id) => { setDmId(id); setView('text'); }}
+          />
+        ) : guild ? (
           <ChannelList
             guild={guild}
             state={state}
@@ -159,7 +206,16 @@ function Main({ onLogout }: { onLogout: () => void }) {
         ) : (
           <div className="empty">Crie um servidor ou entre com um convite.</div>
         )}
-        {voice.channelId && <VoiceBar voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onOpen={() => setView('voice')} />}
+        {voice.channelId && (
+          <VoiceBar
+            voice={voice}
+            channelName={voiceChannelName}
+            onOpen={() => {
+              if (voiceGuild?.is_dm) { setGuildId('@me'); setDmId(voiceGuild.id); } else if (voiceGuild) setGuildId(voiceGuild.id);
+              setView('voice');
+            }}
+          />
+        )}
         <div className="userbar">
           <Avatar user={state.user} online />
           <div className="userbar-name">
@@ -172,9 +228,6 @@ function Main({ onLogout }: { onLogout: () => void }) {
           <button className={`icon ${voice.deafened ? 'danger' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
             {voice.deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
           </button>
-          <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
-            {sounds ? <Bell size={18} /> : <BellOff size={18} />}
-          </button>
           <button className="icon" title="Configurações" onClick={() => setSettingsOpen(true)}><SettingsIcon size={18} /></button>
           <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
         </div>
@@ -182,18 +235,148 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
       <main className="content">
         {view === 'voice' && voice.channelId ? (
-          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onSettings={() => setSettingsOpen(true)} />
+          <VoiceView voice={voice} channelName={voiceChannelName} onSettings={() => setSettingsOpen(true)} />
+        ) : home && !guild ? (
+          <FriendsView state={state} onMessage={openDm} />
         ) : textChannel ? (
-          <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
+          <Chat
+            key={textChannel.id}
+            channel={textChannel}
+            state={state}
+            dispatch={dispatch}
+            gateway={gateway}
+            dm={guild?.is_dm ? dmPeer(guild) : undefined}
+            onCall={() => {
+              const vc = guild?.channels.find((c) => c.type === 'voice');
+              if (vc) openChannel(vc);
+            }}
+          />
         ) : (
           <div className="empty">Nenhum canal de texto.</div>
         )}
       </main>
 
-      {guild && view === 'text' && <MemberList guild={guild} state={state} />}
+      {guild && !home && view === 'text' && <MemberList guild={guild} state={state} />}
       <Toasts />
       <AskHost />
       {settingsOpen && <SettingsView onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Amigos e mensagens diretas
+function HomeSidebar(props: { dms: Guild[]; state: State; activeId: string | null; onFriends: () => void; onOpen: (id: string) => void }) {
+  const { dms, state, activeId, onFriends, onOpen } = props;
+  const me = state.user?.id;
+  return (
+    <div className="channels">
+      <header className="guild-header"><span>Mensagens diretas</span></header>
+      <button className={`channel ${activeId === null ? 'active' : ''}`} onClick={onFriends}>
+        <span className="hash"><Users size={18} /></span> <span className="channel-name">Amigos</span>
+      </button>
+      <div className="section"><span>Conversas</span></div>
+      {dms.length === 0 && <p className="muted small-pad">Abra uma conversa pela lista de amigos.</p>}
+      {dms.map((g) => {
+        const peer = g.members.find((m) => m.id !== me);
+        if (!peer) return null;
+        const inCall = Object.entries(state.voice).some(([, ch]) => g.channels.some((c) => c.id === ch));
+        return (
+          <button key={g.id} className={`channel dm ${activeId === g.id ? 'active' : ''}`} onClick={() => onOpen(g.id)}>
+            <Avatar user={peer} size={28} online={!!state.online[peer.id]} />
+            <span className="channel-name">{peer.display_name}</span>
+            {inCall && <Volume2 size={14} className="ok" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FriendsView({ state, onMessage }: { state: State; onMessage: (userId: string) => void }) {
+  const [tab, setTab] = useState<'online' | 'all' | 'pending' | 'add'>('online');
+  const [name, setName] = useState('');
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const rels = Object.values(state.relationships);
+  const friends = rels.filter((r) => r.type === 'friend');
+  const pending = rels.filter((r) => r.type !== 'friend');
+  const list = tab === 'online' ? friends.filter((r) => state.online[r.user.id]) : tab === 'all' ? friends : tab === 'pending' ? pending : [];
+
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const username = name.trim();
+    if (!username) return;
+    try {
+      await api('POST', '/relationships', { username });
+      setResult({ ok: true, text: `Pedido enviado para ${username}!` });
+      setName('');
+    } catch (err) {
+      setResult({ ok: false, text: (err as Error).message });
+    }
+  };
+  const act = (method: 'PUT' | 'DELETE', id: string) => api(method, `/relationships/${id}`).catch((e) => alert(e.message));
+
+  return (
+    <div className="chat friends">
+      <header className="topbar">
+        <Users size={20} /> Amigos
+        <nav className="friend-tabs">
+          <button className={tab === 'online' ? 'active' : ''} onClick={() => setTab('online')}>Online</button>
+          <button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>Todos</button>
+          <button className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>
+            Pendentes{pending.some((r) => r.type === 'incoming') && <span className="guild-badge inline">{pending.filter((r) => r.type === 'incoming').length}</span>}
+          </button>
+          <button className={`add ${tab === 'add' ? 'active' : ''}`} onClick={() => setTab('add')}>Adicionar amigo</button>
+        </nav>
+      </header>
+      <div className="friends-body">
+        {tab === 'add' ? (
+          <div className="add-friend">
+            <h2>Adicionar amigo</h2>
+            <p className="muted">Digite o nome de usuário da pessoa (o que aparece com @ embaixo do nome dela).</p>
+            <form onSubmit={send} className="add-friend-form">
+              <input value={name} onChange={(e) => { setName(e.target.value); setResult(null); }} placeholder="nome de usuário" autoFocus />
+              <button className="primary" disabled={!name.trim()}>Enviar pedido</button>
+            </form>
+            {result && <p className={result.ok ? 'ok' : 'error'}>{result.text}</p>}
+            <p className="muted">Seu nome de usuário: <strong>@{state.user?.username}</strong></p>
+          </div>
+        ) : (
+          <>
+            <div className="section">
+              {tab === 'online' ? 'Online' : tab === 'all' ? 'Todos os amigos' : 'Pendentes'} — {list.length}
+            </div>
+            {list.length === 0 && (
+              <div className="empty friends-empty">
+                {tab === 'pending' ? 'Nenhum pedido pendente.' : tab === 'online' ? 'Nenhum amigo online agora.' : 'Você ainda não adicionou ninguém.'}
+                <button className="primary" onClick={() => setTab('add')}><UserPlus size={16} /> Adicionar amigo</button>
+              </div>
+            )}
+            {list.map((r) => (
+              <div key={r.user.id} className="friend-row" onDoubleClick={() => r.type === 'friend' && onMessage(r.user.id)}>
+                <Avatar user={r.user} size={36} online={!!state.online[r.user.id]} />
+                <div className="friend-name">
+                  <strong>{r.user.display_name}</strong>
+                  <small>
+                    {r.type === 'incoming' ? 'Pedido de amizade recebido' : r.type === 'outgoing' ? 'Pedido enviado' : state.online[r.user.id] ? 'Online' : 'Offline'}
+                    {' · @'}{r.user.username}
+                  </small>
+                </div>
+                <div className="friend-actions">
+                  {r.type === 'friend' && <button className="icon round-sm" title="Mensagem" onClick={() => onMessage(r.user.id)}><MessageCircle size={18} /></button>}
+                  {r.type === 'incoming' && <button className="icon round-sm ok" title="Aceitar" onClick={() => act('PUT', r.user.id)}><UserCheck size={18} /></button>}
+                  <button
+                    className="icon round-sm danger"
+                    title={r.type === 'friend' ? 'Desfazer amizade' : r.type === 'incoming' ? 'Recusar' : 'Cancelar pedido'}
+                    onClick={() => (r.type !== 'friend' || confirm(`Desfazer amizade com ${r.user.display_name}?`)) && act('DELETE', r.user.id)}
+                  >
+                    <UserX size={18} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -256,6 +439,28 @@ function ChannelList(props: {
   );
 }
 
+/** Botão "adicionar amigo" na lista de membros (some para você mesmo e para quem já é amigo). */
+function AddFriend({ user, state }: { user: User; state: State }) {
+  if (user.id === state.user?.id) return null;
+  const rel = state.relationships[user.id];
+  if (rel?.type === 'friend') return null;
+  const label = rel?.type === 'outgoing' ? 'Pedido enviado' : rel?.type === 'incoming' ? 'Aceitar pedido de amizade' : 'Adicionar amigo';
+  return (
+    <button
+      className="icon small member-add"
+      title={label}
+      disabled={rel?.type === 'outgoing'}
+      onClick={() =>
+        (rel?.type === 'incoming' ? api('PUT', `/relationships/${user.id}`) : api('POST', '/relationships', { username: user.username }))
+          .then(() => toast(rel?.type === 'incoming' ? `Agora você e ${user.display_name} são amigos` : `Pedido enviado para ${user.display_name}`, 'join'))
+          .catch((e) => alert(e.message))
+      }
+    >
+      {rel?.type === 'incoming' ? <UserCheck size={16} /> : <UserPlus size={16} />}
+    </button>
+  );
+}
+
 function MemberList({ guild, state }: { guild: Guild; state: State }) {
   const online = guild.members.filter((m) => state.online[m.id]);
   const offline = guild.members.filter((m) => !state.online[m.id]);
@@ -263,19 +468,19 @@ function MemberList({ guild, state }: { guild: Guild; state: State }) {
     <aside className="members">
       <div className="section">Online — {online.length}</div>
       {online.map((m) => (
-        <div key={m.id} className="member"><Avatar user={m} online /> {m.display_name}</div>
+        <div key={m.id} className="member"><Avatar user={m} online /> <span className="member-name">{m.display_name}</span><AddFriend user={m} state={state} /></div>
       ))}
       <div className="section">Offline — {offline.length}</div>
       {offline.map((m) => (
-        <div key={m.id} className="member offline"><Avatar user={m} /> {m.display_name}</div>
+        <div key={m.id} className="member offline"><Avatar user={m} /> <span className="member-name">{m.display_name}</span><AddFriend user={m} state={state} /></div>
       ))}
     </aside>
   );
 }
 
 // ---------------------------------------------------------------- Chat
-function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => void; gateway: Gateway }) {
-  const { channel, state, dispatch, gateway } = props;
+function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => void; gateway: Gateway; dm?: User; onCall?: () => void }) {
+  const { channel, state, dispatch, gateway, dm, onCall } = props;
   const messages = state.messages[channel.id];
   const [text, setText] = useState('');
   const [hasMore, setHasMore] = useState(true);
@@ -335,9 +540,20 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
   return (
     <div className="chat">
-      <header className="topbar"><span className="hash"><Hash size={20} /></span> {channel.name}</header>
+      {dm ? (
+        <header className="topbar">
+          <Avatar user={dm} size={24} online={!!state.online[dm.id]} /> {dm.display_name}
+          <button className="icon topbar-action" title="Ligar" onClick={onCall}><Phone size={18} /></button>
+        </header>
+      ) : (
+        <header className="topbar"><span className="hash"><Hash size={20} /></span> {channel.name}</header>
+      )}
       <div className="messages" ref={listRef} onScroll={onScroll}>
-        {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
+        {!hasMore && (dm ? (
+          <div className="channel-start"><Avatar user={dm} size={64} /><h2>{dm.display_name}</h2><p>Este é o começo da sua conversa com @{dm.username}.</p></div>
+        ) : (
+          <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>
+        ))}
         {messages?.map((m, i) => {
           const prev = messages[i - 1];
           const grouped = prev && prev.author.id === m.author.id && m.created_at - prev.created_at < 5 * 60_000;
@@ -345,7 +561,7 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
         })}
       </div>
       <form className="composer" onSubmit={send}>
-        <input value={text} onChange={(e) => onType(e.target.value)} placeholder={`Conversar em #${channel.name}`} maxLength={4000} />
+        <input value={text} onChange={(e) => onType(e.target.value)} placeholder={dm ? `Mensagem para @${dm.display_name}` : `Conversar em #${channel.name}`} maxLength={4000} />
       </form>
       <div className="typing">{typingNames.length > 0 && `${typingNames.join(', ')} ${typingNames.length > 1 ? 'estão' : 'está'} digitando…`}</div>
     </div>

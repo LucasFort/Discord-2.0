@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS reactions (
   created_at BIGINT NOT NULL,
   PRIMARY KEY (message_id, user_id, emoji)
 );
+CREATE TABLE IF NOT EXISTS relationships (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  other_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('friend', 'outgoing', 'incoming')),
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, other_id)
+);
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -126,6 +133,14 @@ export const driver: Driver = databaseUrl
   ? await postgresDriver(databaseUrl)
   : await sqliteDriver(process.env.DB_PATH ?? 'discord2.db');
 await driver.exec(SCHEMA);
+// Migrações simples: coluna nova em tabela que já existe (erro de "coluna duplicada" = já migrado).
+for (const sql of ['ALTER TABLE guilds ADD COLUMN is_dm INTEGER NOT NULL DEFAULT 0']) {
+  try {
+    await driver.exec(sql);
+  } catch {
+    /* já existe */
+  }
+}
 if (process.env.NODE_ENV === 'production' && driver.kind === 'sqlite')
   console.warn('[banco] Sem DATABASE_URL: usando SQLite em arquivo. No Render grátis os dados somem a cada reinício.');
 
@@ -146,7 +161,7 @@ export function inviteCode(): string {
 }
 
 export type User = { id: string; username: string; display_name: string };
-export type Guild = { id: string; name: string; owner_id: string };
+export type Guild = { id: string; name: string; owner_id: string; is_dm?: number };
 export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number };
 export type Message = {
   id: string;
@@ -166,10 +181,10 @@ export const isMember = async (guildId: string, userId: string) =>
   !!(await get('SELECT 1 AS ok FROM members WHERE guild_id = ? AND user_id = ?', guildId, userId));
 export const getChannel = async (id: string) => (await get('SELECT * FROM channels WHERE id = ?', id)) as Channel | undefined;
 export const getGuild = async (id: string) =>
-  (await get('SELECT id, name, owner_id, created_at FROM guilds WHERE id = ?', id)) as Guild | undefined;
+  (await get('SELECT id, name, owner_id, created_at, is_dm FROM guilds WHERE id = ?', id)) as Guild | undefined;
 export const guildsOf = async (userId: string) =>
   (await all(
-    'SELECT g.id, g.name, g.owner_id, g.created_at FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
+    'SELECT g.id, g.name, g.owner_id, g.created_at, g.is_dm FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
     userId,
   )) as Guild[];
 export const channelsOf = async (guildId: string) =>
@@ -226,6 +241,19 @@ export async function listMessages(channelId: string, before: string | undefined
     : await all(`${MESSAGE_SELECT} WHERE m.channel_id = ? ORDER BY m.id DESC LIMIT ?`, channelId, limit);
   return withReactions(rows.map(rowToMessage).reverse());
 }
+
+export type Relationship = { user: User; type: 'friend' | 'outgoing' | 'incoming' };
+
+export async function relationshipsOf(userId: string): Promise<Relationship[]> {
+  const rows = await all(
+    'SELECT r.type, u.id, u.username, u.display_name FROM relationships r JOIN users u ON u.id = r.other_id WHERE r.user_id = ? ORDER BY u.display_name',
+    userId,
+  );
+  return rows.map((r) => ({ type: r.type, user: { id: r.id, username: r.username, display_name: r.display_name } }));
+}
+
+export const friendIds = async (userId: string) =>
+  (await all("SELECT other_id FROM relationships WHERE user_id = ? AND type = 'friend'", userId)).map((r) => r.other_id as string);
 
 /** Full guild payload sent to clients. */
 export async function guildPayload(g: Guild) {

@@ -5,6 +5,7 @@ import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk'
 import { requireAuth, signSession } from './auth.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser,
+  relationshipsOf,
 } from './db.js';
 import { isOnline, sendToGuild, sendToUser } from './gateway.js';
 
@@ -119,6 +120,7 @@ export function registerRoutes(app: FastifyInstance) {
     api.post('/api/guilds/:guildId/invites', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
       if (!(await isMember(guildId, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      if ((await getGuild(guildId))?.is_dm) return reply.code(400).send({ error: 'Conversa direta não tem convite' });
       const opts = z
         .object({ max_uses: z.number().int().positive().nullable().optional(), expires_in_hours: z.number().positive().nullable().optional() })
         .parse(req.body ?? {});
@@ -148,12 +150,87 @@ export function registerRoutes(app: FastifyInstance) {
       return payload;
     });
 
+    // ---------- Amigos ----------
+    api.get('/api/relationships', async (req) => relationshipsOf(req.user.id));
+
+    const relationshipChanged = async (a: string, b: string) => {
+      // Cada lado recebe o próprio estado da relação com o outro.
+      for (const [me, other] of [[a, b], [b, a]]) {
+        const row = (await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', me, other)) as { type: string } | undefined;
+        const user = await getUser(other);
+        if (row && user) sendToUser(me, 'RELATIONSHIP_ADD', { type: row.type, user, online: isOnline(other) });
+        else sendToUser(me, 'RELATIONSHIP_REMOVE', { id: other });
+      }
+    };
+
+    api.post('/api/relationships', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+      const { username } = z.object({ username: z.string().trim().min(1).max(64) }).parse(req.body);
+      const other = (await get('SELECT id FROM users WHERE lower(username) = lower(?)', username.replace(/^@/, ''))) as { id: string } | undefined;
+      if (!other) return reply.code(404).send({ error: 'Ninguém com esse nome de usuário. Confira se digitou certinho.' });
+      if (other.id === req.user.id) return reply.code(400).send({ error: 'Você não pode adicionar você mesmo' });
+      const mine = (await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', req.user.id, other.id)) as { type: string } | undefined;
+      if (mine?.type === 'friend') return reply.code(400).send({ error: 'Vocês já são amigos' });
+      if (mine?.type === 'outgoing') return reply.code(400).send({ error: 'Pedido já enviado, esperando a resposta' });
+      const now = Date.now();
+      if (mine?.type === 'incoming') {
+        // A outra pessoa já tinha pedido: vira amizade.
+        await run("UPDATE relationships SET type = 'friend' WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)", req.user.id, other.id, other.id, req.user.id);
+      } else {
+        await run("INSERT INTO relationships (user_id, other_id, type, created_at) VALUES (?, ?, 'outgoing', ?)", req.user.id, other.id, now);
+        await run("INSERT INTO relationships (user_id, other_id, type, created_at) VALUES (?, ?, 'incoming', ?)", other.id, req.user.id, now);
+      }
+      await relationshipChanged(req.user.id, other.id);
+      return { ok: true };
+    });
+
+    api.put('/api/relationships/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const mine = (await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', req.user.id, id)) as { type: string } | undefined;
+      if (mine?.type !== 'incoming') return reply.code(400).send({ error: 'Nenhum pedido dessa pessoa' });
+      await run("UPDATE relationships SET type = 'friend' WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)", req.user.id, id, id, req.user.id);
+      await relationshipChanged(req.user.id, id);
+      return { ok: true };
+    });
+
+    api.delete('/api/relationships/:id', async (req) => {
+      const { id } = req.params as { id: string };
+      await run('DELETE FROM relationships WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)', req.user.id, id, id, req.user.id);
+      await relationshipChanged(req.user.id, id);
+      return { ok: true };
+    });
+
+    // Conversa direta = um "servidor" escondido com as duas pessoas, um canal de texto e um de voz.
+    // Assim mensagens, reações, digitando e chamada reaproveitam tudo que os servidores já têm.
+    api.post('/api/dms/:userId', async (req, reply) => {
+      const { userId } = req.params as { userId: string };
+      const rel = (await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', req.user.id, userId)) as { type: string } | undefined;
+      if (rel?.type !== 'friend') return reply.code(403).send({ error: 'Só dá para mandar mensagem direta para amigos' });
+      const existing = (await get(
+        'SELECT g.id FROM guilds g JOIN members a ON a.guild_id = g.id AND a.user_id = ? JOIN members b ON b.guild_id = g.id AND b.user_id = ? WHERE g.is_dm = 1',
+        req.user.id, userId,
+      )) as { id: string } | undefined;
+      let guildId = existing?.id;
+      if (!guildId) {
+        guildId = newId();
+        const now = Date.now();
+        await run('INSERT INTO guilds (id, name, owner_id, created_at, is_dm) VALUES (?, ?, ?, ?, 1)', guildId, 'DM', req.user.id, now);
+        await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', guildId, req.user.id, now);
+        await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', guildId, userId, now);
+        const ins = 'INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)';
+        await run(ins, newId(), guildId, 'conversa', 'text', 0);
+        await run(ins, newId(), guildId, 'Chamada', 'voice', 0);
+      }
+      const payload = withPresence(await guildPayload((await getGuild(guildId))!));
+      if (!existing) for (const id of [req.user.id, userId]) sendToUser(id, 'GUILD_CREATE', payload);
+      return payload;
+    });
+
     // ---------- Canais ----------
     api.post('/api/guilds/:guildId/channels', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
       const guild = await getGuild(guildId);
       // MVP: só o dono cria canais. Na fase 2 isso vira a permissão "Gerenciar canais".
-      if (!guild || guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode criar canais' });
+      if (!guild || guild.is_dm || guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode criar canais' });
       const body = z
         .object({ name: z.string().trim().min(1).max(64), type: z.enum(['text', 'voice']) })
         .parse(req.body);

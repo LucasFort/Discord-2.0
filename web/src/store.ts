@@ -1,12 +1,13 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { playSound } from './sounds';
-import { getToken, type Channel, type Guild, type Message, type User } from './api';
+import { getToken, type Channel, type Guild, type Message, type Relationship, type User } from './api';
 
 export type State = {
   ready: boolean;
   connection: number; // muda a cada READY (reconexão)
   user: User | null;
   guilds: Guild[];
+  relationships: Record<string, Relationship>; // id do outro usuário -> relação
   online: Record<string, true>;
   voice: Record<string, string>; // userId -> voice channelId
   messages: Record<string, Message[]>; // channelId -> messages
@@ -14,7 +15,7 @@ export type State = {
 };
 
 type Action =
-  | { t: 'READY'; d: { user: User; guilds: Guild[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
+  | { t: 'READY'; d: { user: User; guilds: Guild[]; relationships?: Relationship[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
   | { t: 'GUILD_CREATE'; d: Guild & { online?: string[] } }
   | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; online?: boolean } }
   | { t: 'CHANNEL_CREATE'; d: Channel }
@@ -24,11 +25,13 @@ type Action =
   | { t: 'PRESENCE_UPDATE'; d: { user_id: string; status: 'online' | 'offline' } }
   | { t: 'VOICE_STATE_UPDATE'; d: VoiceState }
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
-  | { t: 'TYPING_SWEEP' };
+  | { t: 'TYPING_SWEEP' }
+  | { t: 'RELATIONSHIP_ADD'; d: Relationship & { online?: boolean } }
+  | { t: 'RELATIONSHIP_REMOVE'; d: { id: string } };
 
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null };
 
-const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
+const initial: State = { ready: false, connection: 0, user: null, guilds: [], relationships: {}, online: {}, voice: {}, messages: {}, typing: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -45,6 +48,7 @@ function reducer(s: State, a: Action): State {
         connection: s.connection + 1,
         user: a.d.user,
         guilds: a.d.guilds,
+        relationships: Object.fromEntries((a.d.relationships ?? []).map((r) => [r.user.id, r])),
         online: { ...Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])), [a.d.user.id]: true },
         voice,
         messages: s.messages,
@@ -128,6 +132,18 @@ function reducer(s: State, a: Action): State {
       }
       return changed ? { ...s, typing } : s;
     }
+    case 'RELATIONSHIP_ADD': {
+      const { online, ...rel } = a.d;
+      return {
+        ...s,
+        relationships: { ...s.relationships, [rel.user.id]: rel },
+        online: online ? { ...s.online, [rel.user.id]: true } : s.online,
+      };
+    }
+    case 'RELATIONSHIP_REMOVE': {
+      const { [a.d.id]: _, ...relationships } = s.relationships;
+      return { ...s, relationships };
+    }
     default:
       // Evento que esta versão do site não conhece (ex.: PONG): ignora em vez de apagar o estado.
       return s;
@@ -135,6 +151,14 @@ function reducer(s: State, a: Action): State {
 }
 
 export type Gateway = { send: (msg: object) => void };
+
+/** Quem quiser reagir a eventos do gateway (avisos de mensagem direta, pedidos de amizade). */
+type GatewayEvent = { t: string; d: any };
+const eventListeners = new Set<(e: GatewayEvent) => void>();
+export function onGatewayEvent(fn: (e: GatewayEvent) => void) {
+  eventListeners.add(fn);
+  return () => void eventListeners.delete(fn);
+}
 
 /** Keeps the WebSocket open (reconnecting) and feeds its events into the reducer. */
 export function useStore(onUnauthorized: () => void) {
@@ -161,6 +185,7 @@ export function useStore(onUnauthorized: () => void) {
           // Mensagem nova de outra pessoa com a aba em segundo plano: toca um aviso curto.
           if (msg.t === 'MESSAGE_CREATE' && document.hidden && msg.d.author?.id !== meRef.current) playSound('message');
           dispatch(msg);
+          eventListeners.forEach((l) => l(msg));
         } catch {
           /* mensagem inválida: ignora */
         }
