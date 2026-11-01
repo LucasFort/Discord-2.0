@@ -274,6 +274,10 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 .tile-volume { position: absolute; top: 10px; right: 10px; display: none; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(0, 0, 0, .6); color: white; font-size: 12px; }
 .tile-volume input { width: 90px; }
 .tile:hover .tile-volume { display: flex; }
+.tile.stream .tile-volume { top: 10px; left: 10px; right: auto; }
+.stage-volume { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.stage-volume input { width: 100px; }
+.tile-volume .icon, .stage-volume .icon { color: inherit; padding: 2px; }
 @media (max-width: 760px) {
   .settings { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .settings-nav { flex-direction: row; padding: 12px 64px 12px 12px; overflow-x: auto; }

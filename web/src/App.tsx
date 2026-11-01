@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
-  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
+  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
@@ -473,6 +473,7 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
           {stageStats && <StreamStats track={focused.screen!} />}
           <div className="stage-bar">
             <span className="live">AO VIVO</span> {focused.name}
+            {!focused.isLocal && <StreamVolume identity={focused.identity} className="stage-volume" />}
             <button className="link" onClick={() => setStageStats((v) => !v)}>{stageStats ? 'Esconder estatísticas' : 'Estatísticas'}</button>
             <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
           </div>
@@ -584,14 +585,31 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
           {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
         </span>
       </div>
+      {!user.isLocal && <StreamVolume identity={user.identity} className="tile-volume" />}
+    </div>
+  );
+}
+
+/** Volume só do áudio da transmissão (jogo, vídeo), separado do volume da voz da pessoa. */
+function StreamVolume({ identity, className }: { identity: string; className: string }) {
+  const settings = useSettings();
+  const vol = settings.streamVolumes[identity] ?? 100;
+  const set = (v: number) => updateSettings({ streamVolumes: { ...settings.streamVolumes, [identity]: v } });
+  return (
+    <div className={className} title="Volume da transmissão" onDoubleClick={(e) => e.stopPropagation()}>
+      <button type="button" className="icon small" title={vol === 0 ? 'Ativar som da transmissão' : 'Silenciar transmissão'} onClick={() => set(vol === 0 ? 100 : 0)}>
+        {vol === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+      </button>
+      <input type="range" min={0} max={100} value={vol} onChange={(e) => set(+e.target.value)} />
+      <small>{vol}%</small>
     </div>
   );
 }
 
 function ShareDialog({ onClose, onStart }: { onClose: () => void; onStart: (o: ShareOptions) => void }) {
-  const [quality, setQuality] = useState<ShareQuality>('1080p30');
+  const [quality, setQuality] = useState<ShareQuality>('source60');
   const [audio, setAudio] = useState(true);
-  const [optimizeFor, setOptimizeFor] = useState<'detail' | 'motion'>('detail');
+  const [optimizeFor, setOptimizeFor] = useState<'detail' | 'motion'>('motion');
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
