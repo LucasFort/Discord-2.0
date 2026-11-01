@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Track } from 'livekit-client';
+import {
+  Expand, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
+} from 'lucide-react';
 import { api, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { useStore, type Gateway, type State } from './store';
 import { QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
@@ -33,6 +37,7 @@ function Auth({ onDone }: { onDone: () => void }) {
   return (
     <div className="auth">
       <form onSubmit={submit} className="auth-card">
+        <div className="logo"><Radio size={28} /></div>
         <h1>{mode === 'login' ? `Bem-vindo de volta ao ${APP_NAME}` : 'Criar uma conta'}</h1>
         <label>
           Usuário
@@ -47,6 +52,7 @@ function Auth({ onDone }: { onDone: () => void }) {
         <button type="button" className="link" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
           {mode === 'login' ? 'Precisa de uma conta? Registre-se' : 'Já tem uma conta? Entrar'}
         </button>
+        <p className="auth-sub">Voz, vídeo e transmissão de tela com seus amigos.</p>
       </form>
     </div>
   );
@@ -56,6 +62,12 @@ function Auth({ onDone }: { onDone: () => void }) {
 function Main({ onLogout }: { onLogout: () => void }) {
   const { state, dispatch, gateway, failures } = useStore(onLogout);
   const voice = useVoice(gateway);
+
+  // Se a conexão em tempo real caiu e voltou, avisa de novo em qual canal de voz estamos.
+  useEffect(() => {
+    if (state.ready && voice.channelId) gateway.send({ op: 'voice_state', channel_id: voice.channelId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.connection]);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
@@ -117,8 +129,9 @@ function Main({ onLogout }: { onLogout: () => void }) {
             {initials(g.name)}
           </button>
         ))}
-        <button className="guild add" title="Criar servidor" onClick={createGuild}>+</button>
-        <button className="guild add" title="Entrar com convite" onClick={joinGuild}>↵</button>
+        <div className="guild-sep" />
+        <button className="guild add" title="Criar servidor" onClick={createGuild}><Plus size={22} /></button>
+        <button className="guild add" title="Entrar com convite" onClick={joinGuild}><LogIn size={20} /></button>
       </nav>
 
       <aside className="sidebar">
@@ -140,9 +153,13 @@ function Main({ onLogout }: { onLogout: () => void }) {
             <strong>{state.user.display_name}</strong>
             <small>@{state.user.username}</small>
           </div>
-          <button className={`icon ${voice.muted ? 'danger' : ''}`} title="Silenciar" onClick={voice.toggleMute}>🎙</button>
-          <button className={`icon ${voice.deafened ? 'danger' : ''}`} title="Ensurdecer" onClick={voice.toggleDeafen}>🎧</button>
-          <button className="icon" title="Sair" onClick={onLogout}>⎋</button>
+          <button className={`icon ${voice.muted ? 'danger' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+            {voice.muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          <button className={`icon ${voice.deafened ? 'danger' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+            {voice.deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+          </button>
+          <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
         </div>
       </aside>
 
@@ -179,14 +196,14 @@ function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: s
     <>
       <div className="section">
         <span>{title}</span>
-        {isOwner && <button className="icon small" title="Criar canal" onClick={() => add(type)}>+</button>}
+        {isOwner && <button className="icon small" title="Criar canal" onClick={() => add(type)}><Plus size={16} /></button>}
       </div>
       {guild.channels
         .filter((c) => c.type === type)
         .map((c) => (
           <div key={c.id}>
             <button className={`channel ${c.id === activeId ? 'active' : ''}`} onClick={() => onOpen(c)}>
-              <span className="hash">{type === 'text' ? '#' : '🔊'}</span> {c.name}
+              <span className="hash">{type === 'text' ? <Hash size={18} /> : <Volume2 size={18} />}</span> <span className="channel-name">{c.name}</span>
             </button>
             {type === 'voice' &&
               guild.members
@@ -204,7 +221,7 @@ function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: s
     <div className="channels">
       <header className="guild-header">
         <span>{guild.name}</span>
-        <button className="icon small" title="Convidar pessoas" onClick={invite}>👤+</button>
+        <button className="icon small" title="Convidar pessoas" onClick={invite}><UserPlus size={18} /></button>
       </header>
       {section('text', 'Canais de texto')}
       {section('voice', 'Canais de voz')}
@@ -291,7 +308,7 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
   return (
     <div className="chat">
-      <header className="topbar"><span className="hash">#</span> {channel.name}</header>
+      <header className="topbar"><span className="hash"><Hash size={20} /></span> {channel.name}</header>
       <div className="messages" ref={listRef} onScroll={onScroll}>
         {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
         {messages?.map((m, i) => {
@@ -333,8 +350,8 @@ function MessageRow({ msg, grouped, mine }: { msg: Message; grouped: boolean; mi
         </div>
       </div>
       <div className="message-actions">
-        {mine && <button className="icon small" title="Editar" onClick={edit}>✎</button>}
-        <button className="icon small" title="Apagar" onClick={remove}>🗑</button>
+        {mine && <button className="icon small" title="Editar" onClick={edit}><Pencil size={16} /></button>}
+        <button className="icon small" title="Apagar" onClick={remove}><Trash2 size={16} /></button>
       </div>
     </div>
   );
@@ -366,10 +383,13 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   return (
     <div className="voicebar">
       <button className="link voicebar-info" onClick={onOpen}>
-        <strong className="ok">{voice.connecting ? 'Conectando…' : 'Voz conectada'}</strong>
+        <strong className={voice.reconnecting || voice.connecting ? 'warn' : 'ok'}>
+          <Radio size={14} /> {voice.connecting ? 'Conectando…' : voice.reconnecting ? 'Reconectando…' : 'Voz conectada'}
+        </strong>
         <small>{channelName}</small>
       </button>
-      <button className="icon danger" title="Desconectar" onClick={voice.leave}>✕</button>
+      {voice.sharing && <span className="live small">AO VIVO</span>}
+      <button className="icon danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={18} /></button>
     </div>
   );
 }
@@ -382,7 +402,10 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
 
   return (
     <div className="voice-view">
-      <header className="topbar">🔊 {channelName}</header>
+      <header className="topbar">
+        <span className="hash"><Volume2 size={20} /></span> {channelName}
+        {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
+      </header>
       {focused ? (
         <div className="stage">
           <VideoTrack track={focused.screen!} contain />
@@ -400,7 +423,7 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
             <div key={u.identity} className={`tile ${u.speaking ? 'speaking' : ''}`}>
               {u.camera ? <VideoTrack track={u.camera} mirror={u.isLocal} /> : <div className="tile-avatar">{initials(u.name)}</div>}
               <div className="tile-name">
-                {u.micMuted && '🔇 '}
+                {u.micMuted && <MicOff size={14} className="muted-icon" />}
                 {u.name}
                 {u.isSharing && <span className="live">AO VIVO</span>}
               </div>
@@ -409,15 +432,21 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
         </div>
       )}
       <div className="controls">
-        <button className={voice.muted ? 'danger' : ''} onClick={voice.toggleMute}>{voice.muted ? 'Ativar microfone' : 'Silenciar'}</button>
-        <button className={voice.deafened ? 'danger' : ''} onClick={voice.toggleDeafen}>{voice.deafened ? 'Ouvir' : 'Ensurdecer'}</button>
-        <button onClick={voice.toggleCamera}>{voice.camera ? 'Desligar câmera' : 'Câmera'}</button>
+        <button className={`round ${voice.muted ? 'off' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+          {voice.muted ? <MicOff size={22} /> : <Mic size={22} />}
+        </button>
+        <button className={`round ${voice.deafened ? 'off' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+          {voice.deafened ? <HeadphoneOff size={22} /> : <Headphones size={22} />}
+        </button>
+        <button className={`round ${voice.camera ? 'on' : ''}`} title={voice.camera ? 'Desligar câmera' : 'Ligar câmera'} onClick={voice.toggleCamera}>
+          {voice.camera ? <Video size={22} /> : <VideoOff size={22} />}
+        </button>
         {voice.sharing ? (
-          <button className="danger" onClick={voice.stopShare}>Parar transmissão</button>
+          <button className="round on" title="Parar transmissão" onClick={voice.stopShare}><MonitorX size={22} /></button>
         ) : (
-          <button className="primary" onClick={() => setShareOpen(true)}>Transmitir tela</button>
+          <button className="round accent" title="Transmitir tela" onClick={() => setShareOpen(true)}><MonitorUp size={22} /></button>
         )}
-        <button className="danger" onClick={voice.leave}>Desconectar</button>
+        <button className="round danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={22} /></button>
       </div>
       {shareOpen && (
         <ShareDialog
@@ -450,9 +479,9 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
       <div className="tile-name">
         <span className="live">AO VIVO</span> {user.isLocal ? 'Sua transmissão' : user.name}
         <span className="tile-actions">
-          <button className="icon small" title="Ampliar" onClick={onFocus}>⤢</button>
-          <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}>⛶</button>
-          {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}>✕</button>}
+          <button className="icon small" title="Ampliar" onClick={onFocus}><Expand size={16} /></button>
+          <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
+          {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
         </span>
       </div>
     </div>

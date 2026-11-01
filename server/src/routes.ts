@@ -6,7 +6,10 @@ import { requireAuth, signSession } from './auth.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser,
 } from './db.js';
-import { sendToGuild, sendToUser } from './gateway.js';
+import { isOnline, sendToGuild, sendToUser } from './gateway.js';
+
+/** Payload do servidor + quem está online agora (para a lista de membros já abrir certa). */
+const withPresence = <T extends { members: { id: string }[] }>(g: T) => ({ ...g, online: g.members.filter((m) => isOnline(m.id)).map((m) => m.id) });
 
 // Valores colados em painéis de deploy costumam vir com espaço ou quebra de linha: limpamos tudo.
 const env = (k: string) => process.env[k]?.trim().replace(/^["']|["']$/g, '').trim() || undefined;
@@ -106,7 +109,7 @@ export function registerRoutes(app: FastifyInstance) {
       await run(ins, newId(), id, 'geral', 'text', 0);
       await run(ins, newId(), id, 'Geral', 'voice', 0);
       const payload = await guildPayload((await getGuild(id))!);
-      sendToUser(req.user.id, 'GUILD_CREATE', payload);
+      sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
       return payload;
     });
 
@@ -135,10 +138,10 @@ export function registerRoutes(app: FastifyInstance) {
       if (!(await isMember(inv.guild_id, req.user.id))) {
         await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', inv.guild_id, req.user.id, Date.now());
         await run('UPDATE invites SET uses = uses + 1 WHERE code = ?', code);
-        await sendToGuild(inv.guild_id, 'GUILD_MEMBER_ADD', { guild_id: inv.guild_id, user: req.user });
+        await sendToGuild(inv.guild_id, 'GUILD_MEMBER_ADD', { guild_id: inv.guild_id, user: req.user, online: isOnline(req.user.id) });
       }
       const payload = await guildPayload((await getGuild(inv.guild_id))!);
-      sendToUser(req.user.id, 'GUILD_CREATE', payload);
+      sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
       return payload;
     });
 

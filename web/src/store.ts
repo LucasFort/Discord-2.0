@@ -3,6 +3,7 @@ import { getToken, type Channel, type Guild, type Message, type User } from './a
 
 export type State = {
   ready: boolean;
+  connection: number; // muda a cada READY (reconexão)
   user: User | null;
   guilds: Guild[];
   online: Record<string, true>;
@@ -13,8 +14,8 @@ export type State = {
 
 type Action =
   | { t: 'READY'; d: { user: User; guilds: Guild[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
-  | { t: 'GUILD_CREATE'; d: Guild }
-  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User } }
+  | { t: 'GUILD_CREATE'; d: Guild & { online?: string[] } }
+  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; online?: boolean } }
   | { t: 'CHANNEL_CREATE'; d: Channel }
   | { t: 'MESSAGE_CREATE' | 'MESSAGE_UPDATE'; d: Message }
   | { t: 'MESSAGE_DELETE'; d: { id: string; channel_id: string } }
@@ -26,7 +27,7 @@ type Action =
 
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null };
 
-const initial: State = { ready: false, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
+const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -40,18 +41,26 @@ function reducer(s: State, a: Action): State {
       return {
         ...initial,
         ready: true,
+        connection: s.connection + 1,
         user: a.d.user,
         guilds: a.d.guilds,
-        online: Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])),
+        online: { ...Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])), [a.d.user.id]: true },
         voice,
         messages: s.messages,
       };
     }
-    case 'GUILD_CREATE':
-      return { ...s, guilds: [...s.guilds.filter((g) => g.id !== a.d.id), a.d] };
+    case 'GUILD_CREATE': {
+      const { online: ids = [], ...guild } = a.d;
+      return {
+        ...s,
+        guilds: [...s.guilds.filter((g) => g.id !== guild.id), guild],
+        online: { ...s.online, ...Object.fromEntries(ids.map((id) => [id, true as const])) },
+      };
+    }
     case 'GUILD_MEMBER_ADD':
       return {
         ...s,
+        online: a.d.online ? { ...s.online, [a.d.user.id]: true } : s.online,
         guilds: s.guilds.map((g) =>
           g.id === a.d.guild_id && !g.members.some((m) => m.id === a.d.user.id) ? { ...g, members: [...g.members, a.d.user] } : g,
         ),
@@ -160,7 +169,7 @@ export function useStore(onUnauthorized: () => void) {
       };
     };
     connect();
-    const ping = setInterval(() => wsRef.current?.readyState === 1 && wsRef.current.send('{"op":"ping"}'), 30000);
+    const ping = setInterval(() => wsRef.current?.readyState === 1 && wsRef.current.send('{"op":"ping"}'), 20000);
     const sweep = setInterval(() => dispatch({ t: 'TYPING_SWEEP' }), 2000);
     return () => {
       closed = true;
