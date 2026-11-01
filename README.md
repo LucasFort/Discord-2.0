@@ -40,17 +40,14 @@ Em produção a API também entrega o site, então é um único serviço (veja o
 
 Limites do plano grátis do Render: o serviço dorme depois de 15 minutos sem uso (o primeiro acesso demora uns 50 segundos) e o banco SQLite é apagado a cada deploy ou reinício. Serve para testar; para guardar dados de verdade, use um disco pago no Render ou troque para PostgreSQL.
 
-## Publicar (link oficial)
+### Site também na Vercel (link oficial)
 
-São três partes, cada uma num lugar:
+O site está publicado na Vercel (projeto `nexo`) e conversa com a API do Render acima.
 
-| Parte | Onde | Como |
-|---|---|---|
-| Site (`web/`) | **Vercel** | Projeto com *Root Directory* `web`. Variável `VITE_API_URL` = endereço público da API (ex.: `https://nexo-api.onrender.com`). Refaça o deploy depois de mudar a variável. |
-| API (`server/`) | **Render** (ou Railway) | A Vercel não mantém WebSocket aberto, então a API fica fora dela. No Render: *New > Blueprint* com este repositório (usa o `render.yaml`). |
-| Voz e tela | **LiveKit Cloud** | Crie um projeto em cloud.livekit.io e copie `LIVEKIT_URL` (`wss://...`), `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET` para as variáveis da API. |
+1. Na Vercel, em *Settings > Environment Variables* do projeto, crie `VITE_API_URL` com o endereço do Render (ex.: `https://nexo-xxxx.onrender.com`, sem barra no final).
+2. Refaça o deploy (*Deployments > Redeploy*). O valor entra no site na hora do build.
 
-No plano grátis do Render o banco SQLite fica em disco temporário: contas e mensagens somem quando o serviço reinicia. Para guardar de vez, use um disco persistente (plano pago do Render ou volume no Railway) apontando `DB_PATH` para ele, ou troque para PostgreSQL.
+A Vercel não mantém WebSocket aberto, por isso a API e o tempo real continuam no Render. O `web/vercel.json` faz os links `/convite/CODIGO` abrirem o app.
 
 ## Estrutura
 

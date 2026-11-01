@@ -18,7 +18,8 @@ export const APP_NAME = 'Nexo';
  * Em produção (Vercel) aponte VITE_API_URL para onde a API está publicada, ex.: https://nexo-api.onrender.com
  */
 export const API_URL = ((import.meta.env.VITE_API_URL as string | undefined) ?? '').replace(/\/+$/, '');
-export const API_MISSING = import.meta.env.PROD && !API_URL;
+/** Site na Vercel sem VITE_API_URL: não há API no mesmo endereço. No Render a API entrega o próprio site. */
+export const API_MISSING = import.meta.env.PROD && !API_URL && location.hostname.endsWith('.vercel.app');
 
 export function gatewayUrl(token: string) {
   const base = API_URL ? new URL(API_URL) : location;
