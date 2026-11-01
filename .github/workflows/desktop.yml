@@ -7,6 +7,8 @@ on:
   push:
     branches: [main]
     paths: ['desktop/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
   workflow_dispatch:
 
 permissions:
@@ -18,6 +20,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.v.outputs.tag }}
@@ -38,6 +41,8 @@ jobs:
 
   build:
     needs: release
+    # Em pull request só testa o build (release é pulada); na main publica.
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +60,15 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexo-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+          if-no-files-found: error
       - name: Envia para a release
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
