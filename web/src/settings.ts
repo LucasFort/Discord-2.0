@@ -75,7 +75,7 @@ export function useSettings() {
 /** Restrições do microfone a partir das configurações. */
 export function micConstraints(s: Settings = current): AudioCaptureOptions {
   return {
-    deviceId: s.inputDeviceId ? { exact: s.inputDeviceId } : undefined,
+    deviceId: s.inputDeviceId ? { ideal: s.inputDeviceId } : undefined, // 'ideal': se o aparelho sumiu, usa o padrão em vez de falhar
     noiseSuppression: s.noiseSuppression,
     echoCancellation: s.echoCancellation,
     autoGainControl: s.autoGainControl,
