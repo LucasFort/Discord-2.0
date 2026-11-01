@@ -1,0 +1,79 @@
+{
+  "name": "nexo-desktop",
+  "productName": "Nexo",
+  "version": "0.1.0",
+  "description": "App para computador do Nexo: voz, chat e transmissão de tela com os amigos.",
+  "author": "Lucas",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.cjs",
+  "nexoUrl": "https://nexo-ly8j.onrender.com",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.nexo.desktop",
+    "productName": "Nexo",
+    "artifactName": "Nexo-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "main.cjs",
+      "preload-picker.cjs",
+      "picker.html",
+      "package.json",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Nexo"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.social-networking",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Network",
+      "icon": "build/icon.png"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LucasFort",
+        "repo": "Discord-2.0",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LucasFort/Discord-2.0.git"
+  }
+}

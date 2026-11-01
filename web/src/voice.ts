@@ -251,8 +251,9 @@ export function useVoice(gateway: Gateway) {
         // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
         simulcast: false,
         screenShareEncoding: { maxBitrate: q.bitrate, maxFramerate: q.fps, priority: 'high' },
-        // Texto: segura a resolução e sacrifica fps. Jogo/vídeo: segura o fps e reduz a resolução.
-        degradationPreference: opts.optimizeFor === 'detail' ? 'maintain-resolution' : 'maintain-framerate',
+        // Texto: equilibra resolução e fps (antes segurava só a resolução e o fps despencava).
+        // Jogo/vídeo: segura o fps e reduz a resolução quando a internet ou a CPU não dão conta.
+        degradationPreference: opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate',
       },
     );
     rerender();

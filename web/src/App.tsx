@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Track } from 'livekit-client';
+import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
-  Bell, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  Activity, Bell, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
 } from 'lucide-react';
 import { api, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { useToasts } from './toast';
+import { ask, AskHost } from './ask';
 import { useStore, type Gateway, type State } from './store';
 import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
@@ -118,11 +119,11 @@ function Main({ onLogout }: { onLogout: () => void }) {
   };
 
   const createGuild = async () => {
-    const name = prompt('Nome do servidor');
+    const name = await ask('Nome do servidor', { okText: 'Criar' });
     if (name) setGuildId((await api<Guild>('POST', '/guilds', { name })).id);
   };
   const joinGuild = async () => {
-    const input = prompt('Cole o link ou o código do convite');
+    const input = await ask('Cole o link ou o código do convite', { okText: 'Entrar' });
     const code = input?.trim().split('/').pop();
     if (code) setGuildId((await api<Guild>('POST', `/invites/${code}`).catch((e) => (alert(e.message), null)))?.id ?? guildId);
   };
@@ -187,6 +188,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
       <Toasts />
+      <AskHost />
     </div>
   );
 }
@@ -203,14 +205,14 @@ function ChannelList(props: {
   const { guild, state, me, activeId, onOpen, voiceSpeaking } = props;
   const isOwner = guild.owner_id === me.id;
   const add = async (type: 'text' | 'voice') => {
-    const name = prompt(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz');
+    const name = await ask(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz', { okText: 'Criar' });
     if (name) await api('POST', `/guilds/${guild.id}/channels`, { name, type }).catch((e) => alert(e.message));
   };
   const invite = async () => {
     const { code } = await api<{ code: string }>('POST', `/guilds/${guild.id}/invites`, {});
     const link = `${location.origin}/convite/${code}`;
     await navigator.clipboard?.writeText(link).catch(() => {});
-    prompt('Convite copiado (válido por 7 dias):', link);
+    await ask('Convite copiado (válido por 7 dias)', { value: link, readOnly: true });
   };
   const section = (type: 'text' | 'voice', title: string) => (
     <>
@@ -356,7 +358,7 @@ function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped
   };
   const names = (ids: string[]) => ids.map((id) => members.find((m) => m.id === id)?.display_name ?? '?').join(', ');
   const edit = async () => {
-    const content = prompt('Editar mensagem', msg.content);
+    const content = await ask('Editar mensagem', { value: msg.content, okText: 'Salvar' });
     if (content && content !== msg.content) await api('PATCH', `/messages/${msg.id}`, { content });
   };
   const remove = async () => {
@@ -447,6 +449,7 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
 function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [stageStats, setStageStats] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
   const streams = voice.users.filter((u) => u.isSharing);
   const focused = streams.find((u) => u.identity === focus && u.screen);
@@ -460,8 +463,10 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
       {focused ? (
         <div className="stage">
           <VideoTrack track={focused.screen!} contain />
+          {stageStats && <StreamStats track={focused.screen!} />}
           <div className="stage-bar">
             <span className="live">AO VIVO</span> {focused.name}
+            <button className="link" onClick={() => setStageStats((v) => !v)}>{stageStats ? 'Esconder estatísticas' : 'Estatísticas'}</button>
             <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
           </div>
         </div>
@@ -533,6 +538,7 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
 }
 
 function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; onFocus: () => void }) {
+  const [stats, setStats] = useState(false);
   if (!user.watching || !user.screen) {
     return (
       <div className="tile stream">
@@ -547,9 +553,11 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
   return (
     <div className="tile stream" onDoubleClick={onFocus}>
       <VideoTrack track={user.screen} contain />
+      {stats && <StreamStats track={user.screen} />}
       <div className="tile-name">
         <span className="live">AO VIVO</span> {user.isLocal ? 'Sua transmissão' : user.name}
         <span className="tile-actions">
+          <button className={`icon small ${stats ? 'active' : ''}`} title="Estatísticas da transmissão" onClick={() => setStats((v) => !v)}><Activity size={16} /></button>
           <button className="icon small" title="Ampliar" onClick={onFocus}><Expand size={16} /></button>
           <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
           {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
@@ -578,8 +586,8 @@ function ShareDialog({ onClose, onStart }: { onClose: () => void; onStart: (o: S
         </div>
         <h3>Otimizar para</h3>
         <div className="options">
-          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Texto nítido</button>
-          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido</button>
+          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Equilibrado (recomendado)</button>
+          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido (jogos)</button>
         </div>
         <label className="check">
           <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} /> Transmitir o áudio também
@@ -610,6 +618,69 @@ function Toasts() {
       {list.map((t) => (
         <div key={t.id} className={`toast ${t.kind ?? ''}`}>{t.text}</div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Números da transmissão em tempo real, para saber por que está travando:
+ * quem transmite vê o que o navegador está mandando e o motivo de limitar (CPU ou internet);
+ * quem assiste vê o que está chegando, a perda de pacotes e os quadros perdidos.
+ */
+function StreamStats({ track }: { track: Track }) {
+  const [lines, setLines] = useState<{ text: string; warn?: string }>({ text: 'medindo…' });
+  useEffect(() => {
+    let prev: { t: number; frames: number; lost: number; recv: number; dropped: number; bytes: number } | null = null;
+    let prevSent: { t: number; bytes: number } | null = null;
+    const mbps = (bytes: number, ms: number) => {
+      const bps = (bytes * 8) / (ms / 1000);
+      return bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} Mbps` : `${Math.round(bps / 1000)} kbps`;
+    };
+    const tick = async () => {
+      if (track instanceof LocalVideoTrack) {
+        const s = (await track.getSenderStats())[0];
+        if (!s) return;
+        const reason = s.qualityLimitationReason;
+        const rate = prevSent && s.timestamp > prevSent.t ? mbps((s.bytesSent ?? 0) - prevSent.bytes, s.timestamp - prevSent.t) : '…';
+        prevSent = { t: s.timestamp, bytes: s.bytesSent ?? 0 };
+        setLines({
+          text: `Enviando ${s.frameWidth}×${s.frameHeight} · ${Math.round(s.framesPerSecond ?? 0)} fps · ${rate}`,
+          warn:
+            reason === 'cpu' ? 'Limitado pela CPU: feche jogos/abas pesadas ou use 720p'
+            : reason === 'bandwidth' && (s.framesPerSecond ?? 0) < 24 ? 'Limitado pela internet de upload: tente 720p ou 1080p 30 fps'
+            : reason === 'bandwidth' ? 'Resolução reduzida para caber na internet de upload'
+            : undefined,
+        });
+      } else if (track instanceof RemoteVideoTrack) {
+        const s = await track.getReceiverStats();
+        if (!s) return;
+        const now = s.timestamp;
+        const cur = { t: now, frames: s.framesDecoded ?? 0, lost: s.packetsLost ?? 0, recv: s.packetsReceived ?? 0, dropped: s.framesDropped ?? 0, bytes: s.bytesReceived ?? 0 };
+        if (prev && now > prev.t) {
+          const dt = (now - prev.t) / 1000;
+          const fps = Math.round((cur.frames - prev.frames) / dt);
+          const lost = cur.lost - prev.lost;
+          const total = lost + (cur.recv - prev.recv);
+          const lossPct = total > 0 ? (100 * lost) / total : 0;
+          setLines({
+            text: `Recebendo ${s.frameWidth ?? '?'}×${s.frameHeight ?? '?'} · ${fps} fps · ${mbps(cur.bytes - prev.bytes, now - prev.t)} · perda ${lossPct.toFixed(1)}%`,
+            warn:
+              lossPct > 3 ? 'Muita perda de pacotes: a internet de alguém está instável (Wi-Fi?)'
+              : cur.dropped - prev.dropped > 5 ? 'Seu PC está descartando quadros ao decodificar'
+              : undefined,
+          });
+        }
+        prev = cur;
+      }
+    };
+    const id = setInterval(() => void tick().catch(() => {}), 1000);
+    void tick().catch(() => {});
+    return () => clearInterval(id);
+  }, [track]);
+  return (
+    <div className="stream-stats">
+      <div>{lines.text}</div>
+      {lines.warn && <div className="warn">{lines.warn}</div>}
     </div>
   );
 }
