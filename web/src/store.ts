@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
+import { playSound } from './sounds';
 import { getToken, type Channel, type Guild, type Message, type User } from './api';
 
 export type State = {
@@ -127,6 +128,9 @@ function reducer(s: State, a: Action): State {
       }
       return changed ? { ...s, typing } : s;
     }
+    default:
+      // Evento que esta versão do site não conhece (ex.: PONG): ignora em vez de apagar o estado.
+      return s;
   }
 }
 
@@ -136,6 +140,7 @@ export type Gateway = { send: (msg: object) => void };
 export function useStore(onUnauthorized: () => void) {
   const [state, dispatch] = useReducer(reducer, initial);
   const wsRef = useRef<WebSocket | null>(null);
+  const meRef = useRef<string | null>(null);
   const [failures, setFailures] = useState(0); // tentativas seguidas sem conseguir conectar
 
   useEffect(() => {
@@ -149,7 +154,16 @@ export function useStore(onUnauthorized: () => void) {
       ws.onmessage = (e) => {
         retry = 0;
         setFailures(0);
-        dispatch(JSON.parse(e.data));
+        try {
+          const msg = JSON.parse(e.data);
+          if (!msg?.t || msg.t === 'PONG') return;
+          if (msg.t === 'READY') meRef.current = msg.d.user.id;
+          // Mensagem nova de outra pessoa com a aba em segundo plano: toca um aviso curto.
+          if (msg.t === 'MESSAGE_CREATE' && document.hidden && msg.d.author?.id !== meRef.current) playSound('message');
+          dispatch(msg);
+        } catch {
+          /* mensagem inválida: ignora */
+        }
       };
       ws.onclose = (e) => {
         if (closed) return;

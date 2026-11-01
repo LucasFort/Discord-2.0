@@ -10,6 +10,14 @@ import {
   RemoteAudioTrack,
 } from 'livekit-client';
 import { api } from './api';
+import { playSound } from './sounds';
+import { toast } from './toast';
+
+/** Emoji que alguém mandou na call e que sobe flutuando por cima da tela. */
+export type FloatingReaction = { id: number; emoji: string; name: string; left: number };
+const CALL_EMOJIS = ['👍', '😂', '❤️', '🔥', '🎉', '👏', '😮', '💀'];
+export { CALL_EMOJIS };
+let floatId = 1;
 import type { Gateway } from './store';
 
 export type ShareQuality = '720p30' | '1080p30' | '1080p60' | 'source60';
@@ -52,6 +60,12 @@ export function useVoice(gateway: Gateway) {
   const [deafened, setDeafened] = useState(false);
   const deafRef = useRef(false);
   const [watching, setWatching] = useState<Record<string, true>>({});
+  const [floating, setFloating] = useState<FloatingReaction[]>([]);
+  const addFloating = useCallback((emoji: string, name: string) => {
+    const f = { id: floatId++, emoji, name, left: 10 + Math.random() * 80 };
+    setFloating((list) => [...list.slice(-20), f]);
+    setTimeout(() => setFloating((list) => list.filter((x) => x.id !== f.id)), 3000);
+  }, []);
   const [, setTick] = useState(0);
   const rerender = useCallback(() => setTick((t) => t + 1), []);
 
@@ -70,7 +84,9 @@ export function useVoice(gateway: Gateway) {
     const room = roomRef.current;
     roomRef.current = null;
     await room?.disconnect();
+    if (room) playSound('leave');
     if (audioBox.current) audioBox.current.innerHTML = '';
+    setFloating([]);
     setChannelId(null);
     setWatching({});
     setReconnecting(false);
@@ -112,8 +128,26 @@ export function useVoice(gateway: Gateway) {
             if (pub.source === Track.Source.ScreenShare) setWatching(({ [p.identity]: _, ...rest }) => rest);
             rerender();
           })
-          .on(RoomEvent.ParticipantConnected, rerender)
-          .on(RoomEvent.ParticipantDisconnected, rerender)
+          .on(RoomEvent.ParticipantConnected, (p) => {
+            playSound('join');
+            toast(`${p.name || 'Alguém'} entrou na call`, 'join');
+            rerender();
+          })
+          .on(RoomEvent.ParticipantDisconnected, (p) => {
+            playSound('leave');
+            toast(`${p.name || 'Alguém'} saiu da call`, 'leave');
+            setWatching(({ [p.identity]: _, ...rest }) => rest);
+            rerender();
+          })
+          .on(RoomEvent.DataReceived, (payload, p, _kind, topic) => {
+            if (topic !== 'reaction') return;
+            try {
+              const { emoji } = JSON.parse(new TextDecoder().decode(payload));
+              if (CALL_EMOJIS.includes(emoji)) addFloating(emoji, p?.name || '');
+            } catch {
+              /* ignora */
+            }
+          })
           .on(RoomEvent.TrackMuted, rerender)
           .on(RoomEvent.TrackUnmuted, rerender)
           .on(RoomEvent.ActiveSpeakersChanged, rerender)
@@ -154,6 +188,7 @@ export function useVoice(gateway: Gateway) {
         await room.startAudio().catch(() => {});
         setChannelId(id);
         setReconnecting(false);
+        if (rejoinTries.current === 0) playSound('join'); // reconexão automática não toca de novo
         rejoinTries.current = 0;
         gateway.send({ op: 'voice_state', channel_id: id });
       } catch (e) {
@@ -164,7 +199,7 @@ export function useVoice(gateway: Gateway) {
         setConnecting(false);
       }
     },
-    [gateway, leave, muted, rerender],
+    [gateway, leave, muted, rerender, addFloating],
   );
 
   // Sai da sala ao fechar a aba
@@ -173,6 +208,7 @@ export function useVoice(gateway: Gateway) {
   const toggleMute = async () => {
     const next = !muted;
     setMuted(next);
+    playSound(next ? 'mute' : 'unmute');
     if (!next && deafened) toggleDeafen();
     await roomRef.current?.localParticipant.setMicrophoneEnabled(!next);
   };
@@ -180,6 +216,7 @@ export function useVoice(gateway: Gateway) {
   const toggleDeafen = () => {
     const next = !deafRef.current;
     deafRef.current = next;
+    playSound(next ? 'mute' : 'unmute');
     setDeafened(next);
     roomRef.current?.remoteParticipants.forEach((p) =>
       p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(next ? 0 : 1)),
@@ -235,6 +272,14 @@ export function useVoice(gateway: Gateway) {
     setWatching(({ [identity]: _, ...rest }) => (on ? { ...rest, [identity]: true } : rest));
   };
 
+  /** Manda um emoji para todo mundo da call (canal de dados do LiveKit, sem passar pelo nosso servidor). */
+  const sendReaction = (emoji: string) => {
+    const lp = roomRef.current?.localParticipant;
+    if (!lp) return;
+    addFloating(emoji, lp.name || '');
+    void lp.publishData(new TextEncoder().encode(JSON.stringify({ emoji })), { reliable: true, topic: 'reaction' }).catch(() => {});
+  };
+
   const room = roomRef.current;
   const toUser = (p: Participant, isLocal: boolean): VoiceUser => {
     const screenPub = p.getTrackPublication(Track.Source.ScreenShare);
@@ -274,6 +319,8 @@ export function useVoice(gateway: Gateway) {
     startShare,
     stopShare,
     setWatch,
+    floating,
+    sendReaction,
   };
 }
 

@@ -8,6 +8,9 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Criar servidor (já vem com `#geral` e o canal de voz `Geral`), convidar por link (`/convite/CODIGO`, válido por 7 dias) e entrar com convite
 - Canais de texto e de voz (só o dono do servidor cria canais por enquanto)
 - Chat em tempo real: enviar, editar, apagar, histórico com rolagem infinita, "fulano está digitando", markdown básico (`**negrito**`, `*itálico*`, `` `código` ``, `||spoiler||`, links)
+- Reações nas mensagens (👍 ❤️ 😂 😮 😢 🔥 🎉 👀), com a lista de quem reagiu ao passar o mouse
+- Sons: entrada e saída na call, mutar e desmutar, mensagem nova com a aba em segundo plano (o sino na barra do usuário desliga)
+- Avisos na tela ("fulano entrou na call") e emojis que sobem flutuando na call para todo mundo
 - Lista de membros online e offline
 - Voz: entrar e sair, silenciar, ensurdecer, indicador de quem está falando, supressão de ruído e cancelamento de eco, lista de quem está em cada canal de voz na barra lateral
 - Câmera
@@ -71,4 +74,4 @@ web/src/
 
 ## Próximos passos (fase 2 do roadmap)
 
-Cargos e permissões, amigos e DMs, reações e respostas, anexos, notificações, aperte para falar, app desktop em Electron (seletor de janela próprio e áudio do sistema), troca do SQLite por PostgreSQL.
+Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, app desktop em Electron (seletor de janela próprio e áudio do sistema), troca do SQLite por PostgreSQL.

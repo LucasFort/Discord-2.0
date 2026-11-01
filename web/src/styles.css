@@ -166,3 +166,57 @@ button.round.danger { background: var(--danger); color: white; width: 64px; bord
   .members { display: none; }
   .tile.stream { grid-column: auto; }
 }
+
+/* ---------- Interações ---------- */
+.message { animation: msg-in .18s ease-out; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-muted); border: 1px solid transparent; font-size: 13px; transition: transform .12s, border-color .12s, background .12s; }
+.reaction:hover { border-color: var(--line); color: var(--text-strong); }
+.reaction:active { transform: scale(.92); }
+.reaction.mine { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); }
+.reaction-emoji { font-size: 15px; display: inline-block; animation: pop .25s ease-out; }
+@keyframes pop { 0% { transform: scale(.4); } 70% { transform: scale(1.25); } 100% { transform: scale(1); } }
+
+.emoji-picker { position: absolute; right: 20px; top: 18px; z-index: 5; display: flex; gap: 2px; padding: 4px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .4); animation: msg-in .12s ease-out; }
+.emoji-picker button { background: none; font-size: 20px; padding: 4px 6px; border-radius: 8px; transition: transform .1s, background .1s; }
+.emoji-picker button:hover { background: var(--bg-hover); transform: scale(1.2); }
+.emoji-picker.up { right: auto; left: 50%; top: auto; bottom: calc(100% + 8px); transform: translateX(-50%); animation: none; }
+.call-reactions { position: relative; }
+
+.voice-view { position: relative; }
+.floating-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
+.floating { position: absolute; bottom: 90px; display: flex; flex-direction: column; align-items: center; animation: float-up 3s ease-out forwards; }
+.floating span { font-size: 40px; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .4)); }
+.floating small { font-size: 11px; color: white; background: rgba(0, 0, 0, .45); padding: 1px 6px; border-radius: 6px; }
+@keyframes float-up {
+  0% { opacity: 0; transform: translateY(0) scale(.5); }
+  10% { opacity: 1; transform: translateY(-20px) scale(1.1); }
+  100% { opacity: 0; transform: translateY(-60vh) scale(1); }
+}
+
+.voice-member { border-radius: 6px; transition: color .15s; }
+.voice-member.speaking { color: var(--text-strong); }
+.voice-member.speaking .avatar { box-shadow: 0 0 0 2px var(--ok); }
+.tile { transition: border-color .15s, box-shadow .15s, transform .15s; }
+.tile.speaking .tile-avatar { animation: speak 1.2s ease-in-out infinite; }
+@keyframes speak { 50% { box-shadow: 0 0 0 8px rgba(45, 212, 164, .25); } }
+button.round { transition: transform .1s, background .15s; }
+button.round:active { transform: scale(.9); }
+.guild { transition: border-radius .2s, background .2s, transform .1s; }
+.guild:active { transform: scale(.94); }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { padding: 10px 14px; border-radius: 10px; background: var(--bg-1); color: var(--text-strong); border: 1px solid var(--line); border-left: 4px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .4); font-size: 14px; animation: toast-in .2s ease-out; }
+.toast.join { border-left-color: var(--ok); }
+.toast.leave { border-left-color: var(--text-muted); }
+.toast.error { border-left-color: var(--danger); }
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+
+.crash { max-width: 480px; display: grid; gap: 10px; }
+.crash pre { white-space: pre-wrap; text-align: left; background: var(--bg-1); padding: 10px; border-radius: 8px; font-size: 12px; color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+}
