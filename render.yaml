@@ -1,4 +1,13 @@
 # Blueprint do Render: New > Blueprint e escolha este repositório.
+# Mudanças neste arquivo são aplicadas automaticamente pelo Render.
+databases:
+  # Postgres grátis do Render: guarda contas, servidores e mensagens entre reinícios e deploys.
+  # Atenção: no plano grátis o Render apaga o banco 30 dias depois de criado.
+  - name: nexo-db
+    plan: free
+    databaseName: nexo
+    user: nexo
+
 services:
   - type: web
     name: nexo
@@ -6,6 +15,10 @@ services:
     plan: free
     healthCheckPath: /api/health
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nexo-db
+          property: connectionString
       - key: JWT_SECRET
         generateValue: true
       - key: LIVEKIT_URL      # do LiveKit Cloud, começa com wss://
