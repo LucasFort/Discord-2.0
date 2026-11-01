@@ -112,17 +112,28 @@ export function useVoice(gateway: Gateway) {
             if (roomRef.current === room) leave();
           });
 
-        await room.connect(url, token, { autoSubscribe: false });
+        try {
+          await room.connect(url, token, { autoSubscribe: false });
+        } catch (e) {
+          throw new Error(`não conectou ao servidor de voz (${url}). ${(e as Error).message}`);
+        }
         room.remoteParticipants.forEach((p) => p.trackPublications.forEach(autoSubscribe));
-        await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        });
+        // Sem microfone (permissão negada ou nenhum dispositivo) a pessoa ainda entra, só que mutada.
+        try {
+          await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          });
+        } catch (e) {
+          setMuted(true);
+          alert(`Entrou na call sem microfone: ${(e as Error).message}. Libere o microfone no cadeado da barra de endereço.`);
+        }
         await room.startAudio().catch(() => {});
         setChannelId(id);
         gateway.send({ op: 'voice_state', channel_id: id });
       } catch (e) {
+        await roomRef.current?.disconnect();
         roomRef.current = null;
         alert(`Não foi possível entrar na voz: ${(e as Error).message}`);
       } finally {
