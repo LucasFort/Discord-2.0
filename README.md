@@ -4,7 +4,7 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 
 ## O que já funciona
 
-- Cadastro e login (senha com bcrypt e sessão por JWT)
+- Cadastro e login (senha com bcrypt, sessão por JWT, limite de 10 tentativas por minuto)
 - Criar servidor (já vem com `#geral` e o canal de voz `Geral`), convidar por link (`/convite/CODIGO`, válido por 7 dias) e entrar com convite
 - Canais de texto e de voz (só o dono do servidor cria canais por enquanto)
 - Chat em tempo real: enviar, editar, apagar, histórico com rolagem infinita, "fulano está digitando", markdown básico (`**negrito**`, `*itálico*`, `` `código` ``, `||spoiler||`, links)
@@ -38,7 +38,20 @@ Em produção a API também entrega o site, então é um único serviço (veja o
 2. **Render:** crie uma conta em https://render.com entrando com o GitHub. Clique em **New > Blueprint**, escolha o repositório `Discord-2.0` e confirme. O Render lê o `render.yaml` e pede `LIVEKIT_URL`, `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET`: cole os valores do passo 1.
 3. Espere o deploy terminar (alguns minutos) e abra o endereço `https://nexo-xxxx.onrender.com` que o Render mostrar. Já vem com HTTPS, que o navegador exige para microfone e tela.
 
-Limites do plano grátis do Render: o serviço dorme depois de 15 minutos sem uso (o primeiro acesso demora uns 50 segundos) e o banco SQLite é apagado a cada deploy ou reinício. Serve para testar; para guardar dados de verdade, use um disco pago no Render ou troque para PostgreSQL.
+O blueprint também cria um **Postgres grátis do Render** (`nexo-db`) e liga o app nele pela variável `DATABASE_URL`, então contas, servidores e mensagens sobrevivem a reinícios e deploys.
+
+Limites do plano grátis do Render: o serviço dorme depois de 15 minutos sem uso (o primeiro acesso demora uns 50 segundos) e o Postgres grátis é apagado 30 dias depois de criado. Para guardar dados de verdade, suba o banco para um plano pago ou aponte `DATABASE_URL` para outro Postgres (Supabase, Neon etc.).
+
+### Banco de dados
+
+- Com `DATABASE_URL` definido, o app usa PostgreSQL.
+- Sem `DATABASE_URL`, usa SQLite no arquivo `DB_PATH` (padrão `discord2.db`), ideal para desenvolvimento.
+
+As tabelas são criadas sozinhas na primeira execução.
+
+### Se a voz não funcionar online
+
+Abra `https://SEU-APP.onrender.com/api/voice-config`. Precisa mostrar `"configured":true` e uma URL `wss://`. Erro "invalid token" quer dizer que a API Key e o API Secret não batem com o projeto da `LIVEKIT_URL`: gere uma chave nova no LiveKit e cole os 3 valores de novo em *nexo > Environment* no Render.
 
 ## Estrutura
 

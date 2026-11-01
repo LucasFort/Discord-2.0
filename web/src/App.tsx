@@ -54,7 +54,7 @@ function Auth({ onDone }: { onDone: () => void }) {
 
 // ---------------------------------------------------------------- Layout
 function Main({ onLogout }: { onLogout: () => void }) {
-  const { state, dispatch, gateway } = useStore(onLogout);
+  const { state, dispatch, gateway, failures } = useStore(onLogout);
   const voice = useVoice(gateway);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -72,7 +72,20 @@ function Main({ onLogout }: { onLogout: () => void }) {
     }
   }, [state.ready]);
 
-  if (!state.ready || !state.user) return <div className="loading">Conectando…</div>;
+  if (!state.ready || !state.user)
+    return (
+      <div className="loading">
+        <div>
+          <p>{failures >= 3 ? 'Não foi possível conectar ao servidor. Tentando de novo…' : 'Conectando…'}</p>
+          {failures >= 3 && (
+            <>
+              <p className="muted">Se o site acabou de acordar, pode levar até 1 minuto.</p>
+              <button onClick={onLogout}>Sair e entrar de novo</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
 
   const openChannel = (c: Channel) => {
     if (c.type === 'voice') {

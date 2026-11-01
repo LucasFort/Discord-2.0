@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { getToken, type Channel, type Guild, type Message, type User } from './api';
 
 export type State = {
@@ -127,6 +127,7 @@ export type Gateway = { send: (msg: object) => void };
 export function useStore(onUnauthorized: () => void) {
   const [state, dispatch] = useReducer(reducer, initial);
   const wsRef = useRef<WebSocket | null>(null);
+  const [failures, setFailures] = useState(0); // tentativas seguidas sem conseguir conectar
 
   useEffect(() => {
     let closed = false;
@@ -136,11 +137,25 @@ export function useStore(onUnauthorized: () => void) {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/gateway?token=${encodeURIComponent(getToken() ?? '')}`);
       wsRef.current = ws;
-      ws.onopen = () => (retry = 0);
-      ws.onmessage = (e) => dispatch(JSON.parse(e.data));
+      ws.onmessage = (e) => {
+        retry = 0;
+        setFailures(0);
+        dispatch(JSON.parse(e.data));
+      };
       ws.onclose = (e) => {
         if (closed) return;
         if (e.code === 4001) return onUnauthorized();
+        setFailures((f) => f + 1);
+        // Proxies (como o do Render) podem trocar o código 4001 por 1006. Confirmamos o login por HTTP:
+        // se a conta não existe mais (ex.: banco recriado), volta para a tela de login em vez de tentar para sempre.
+        fetch('/api/me', { headers: { authorization: `Bearer ${getToken() ?? ''}` } })
+          .then((r) => {
+            if (r.status === 401 && !closed) {
+              closed = true;
+              onUnauthorized();
+            }
+          })
+          .catch(() => {});
         timer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000));
       };
     };
@@ -159,5 +174,5 @@ export function useStore(onUnauthorized: () => void) {
   const gateway: Gateway = {
     send: (msg) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(msg)),
   };
-  return { state, dispatch, gateway };
+  return { state, dispatch, gateway, failures };
 }
