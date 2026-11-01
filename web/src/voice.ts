@@ -8,7 +8,10 @@ import {
   type RemoteTrackPublication,
   type RemoteTrack,
   RemoteAudioTrack,
+  type LocalAudioTrack,
 } from 'livekit-client';
+import { MicProcessor } from './mic';
+import { getSettings, micConstraints, onSettings, type Settings } from './settings';
 import { api } from './api';
 import { playSound } from './sounds';
 import { toast } from './toast';
@@ -18,6 +21,16 @@ export type FloatingReaction = { id: number; emoji: string; name: string; left: 
 const CALL_EMOJIS = ['👍', '😂', '❤️', '🔥', '🎉', '👏', '😮', '💀'];
 export { CALL_EMOJIS };
 let floatId = 1;
+
+/** Processador do microfone em uso na call (o medidor das configurações lê o nível daqui). */
+export let activeMic: MicProcessor | null = null;
+let micCtx: AudioContext | null = null;
+
+/** Volume final de cada pessoa: volume geral × volume dela (no máximo 100%). */
+function volumeFor(identity: string, deaf: boolean, s: Settings = getSettings()) {
+  if (deaf) return 0;
+  return Math.min(1, (s.outputVolume / 100) * ((s.userVolumes[identity] ?? 100) / 100));
+}
 import type { Gateway } from './store';
 
 export type ShareQuality = '720p30' | '1080p30' | '1080p60' | 'source60';
@@ -84,6 +97,7 @@ export function useVoice(gateway: Gateway) {
     const room = roomRef.current;
     roomRef.current = null;
     await room?.disconnect();
+    activeMic = null;
     if (room) playSound('leave');
     if (audioBox.current) audioBox.current.innerHTML = '';
     setFloating([]);
@@ -105,6 +119,9 @@ export function useVoice(gateway: Gateway) {
           dynacast: true,
           // Voz: Opus com DTX (não manda nada no silêncio) e RED (redundância contra perda de pacotes).
           publishDefaults: { dtx: true, red: true },
+          audioCaptureDefaults: micConstraints(),
+          audioOutput: getSettings().outputDeviceId ? { deviceId: getSettings().outputDeviceId } : undefined,
+          videoCaptureDefaults: getSettings().videoDeviceId ? { deviceId: getSettings().videoDeviceId } : undefined,
         });
         roomRef.current = room;
 
@@ -113,10 +130,10 @@ export function useVoice(gateway: Gateway) {
             autoSubscribe(pub);
             rerender();
           })
-          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, p) => {
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
-              if (deafRef.current) (track as RemoteAudioTrack).setVolume(0);
+              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, deafRef.current));
             }
             rerender();
           })
@@ -176,11 +193,8 @@ export function useVoice(gateway: Gateway) {
         room.remoteParticipants.forEach((p) => p.trackPublications.forEach(autoSubscribe));
         // Sem microfone (permissão negada ou nenhum dispositivo) a pessoa ainda entra, só que mutada.
         try {
-          await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          });
+          await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, micConstraints());
+          await attachMicProcessor(room);
         } catch (e) {
           setMuted(true);
           alert(`Entrou na call sem microfone: ${(e as Error).message}. Libere o microfone no cadeado da barra de endereço.`);
@@ -202,6 +216,55 @@ export function useVoice(gateway: Gateway) {
     [gateway, leave, muted, rerender, addFloating],
   );
 
+  /** Coloca o processamento (volume de entrada, sensibilidade, aperte para falar) no microfone publicado. */
+  const attachMicProcessor = async (room: Room) => {
+    const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack as LocalAudioTrack | undefined;
+    if (!track || track.getProcessor()) return;
+    try {
+      micCtx ??= new AudioContext();
+      if (micCtx.state === 'suspended') await micCtx.resume().catch(() => {});
+      await track.setAudioContext(micCtx);
+      const proc = new MicProcessor();
+      await track.setProcessor(proc);
+      activeMic = proc;
+    } catch (e) {
+      console.warn('Processamento do microfone indisponível', e);
+    }
+  };
+
+  const applyVolumes = useCallback(() => {
+    roomRef.current?.remoteParticipants.forEach((p) =>
+      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, deafRef.current))),
+    );
+  }, []);
+
+  // Aplica na call as mudanças feitas nas configurações.
+  useEffect(() => {
+    let prev = getSettings();
+    return onSettings(async (s) => {
+      const room = roomRef.current;
+      const before = prev;
+      prev = s;
+      applyVolumes();
+      if (!room) return;
+      try {
+        if (s.outputDeviceId !== before.outputDeviceId) await room.switchActiveDevice('audiooutput', s.outputDeviceId || 'default');
+        if (s.videoDeviceId !== before.videoDeviceId && s.videoDeviceId) await room.switchActiveDevice('videoinput', s.videoDeviceId);
+        const micChanged =
+          s.inputDeviceId !== before.inputDeviceId ||
+          s.noiseSuppression !== before.noiseSuppression ||
+          s.echoCancellation !== before.echoCancellation ||
+          s.autoGainControl !== before.autoGainControl;
+        if (micChanged) {
+          const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack as LocalAudioTrack | undefined;
+          await track?.restartTrack(micConstraints(s));
+        }
+      } catch (e) {
+        console.warn('Não deu para trocar o dispositivo', e);
+      }
+    });
+  }, [applyVolumes]);
+
   // Sai da sala ao fechar a aba
   useEffect(() => () => void roomRef.current?.disconnect(), []);
 
@@ -210,7 +273,11 @@ export function useVoice(gateway: Gateway) {
     setMuted(next);
     playSound(next ? 'mute' : 'unmute');
     if (!next && deafened) toggleDeafen();
-    await roomRef.current?.localParticipant.setMicrophoneEnabled(!next);
+    const room = roomRef.current;
+    if (room) {
+      await room.localParticipant.setMicrophoneEnabled(!next, micConstraints()).catch(() => {});
+      if (!next) await attachMicProcessor(room);
+    }
   };
 
   const toggleDeafen = () => {
@@ -218,15 +285,21 @@ export function useVoice(gateway: Gateway) {
     deafRef.current = next;
     playSound(next ? 'mute' : 'unmute');
     setDeafened(next);
-    roomRef.current?.remoteParticipants.forEach((p) =>
-      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(next ? 0 : 1)),
-    );
-    roomRef.current?.localParticipant.setMicrophoneEnabled(!next && !muted);
+    applyVolumes();
+    const room = roomRef.current;
+    if (room)
+      void room.localParticipant
+        .setMicrophoneEnabled(!next && !muted, micConstraints())
+        .then(() => (!next && !muted ? attachMicProcessor(room) : undefined))
+        .catch(() => {});
   };
 
   const toggleCamera = async () => {
     const lp = roomRef.current?.localParticipant;
-    if (lp) await lp.setCameraEnabled(!lp.isCameraEnabled, { resolution: { width: 1280, height: 720, frameRate: 30 } });
+    if (lp) await lp.setCameraEnabled(!lp.isCameraEnabled, {
+      resolution: { width: 1280, height: 720, frameRate: 30 },
+      deviceId: getSettings().videoDeviceId || undefined,
+    });
     rerender();
   };
 

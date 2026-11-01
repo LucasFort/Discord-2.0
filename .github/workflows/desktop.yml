@@ -75,4 +75,4 @@ jobs:
           TAG: ${{ needs.release.outputs.tag }}
         run: |
           shopt -s nullglob
-          gh release upload "$TAG" dist/*.exe dist/*.AppImage dist/*.yml dist/*.blockmap --clobber
+          gh release upload "$TAG" dist/*.exe dist/*.AppImage dist/latest*.yml dist/*.blockmap --clobber
