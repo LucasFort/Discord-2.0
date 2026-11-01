@@ -26,6 +26,9 @@ let floatId = 1;
 export let activeMic: MicProcessor | null = null;
 let micCtx: AudioContext | null = null;
 
+/** O microfone só passa pelo processamento quando alguma opção precisa dele. */
+const needsMicProcessor = (s: Settings) => s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
+
 /** Volume final de cada pessoa: volume geral × volume dela (no máximo 100%). */
 function volumeFor(identity: string, deaf: boolean, s: Settings = getSettings()) {
   if (deaf) return 0;
@@ -112,6 +115,11 @@ export function useVoice(gateway: Gateway) {
       if (roomRef.current) await leave();
       leavingRef.current = false;
       setConnecting(true);
+      // Cria o áudio ainda dentro do clique (o navegador só libera som que começa num clique).
+      if (needsMicProcessor(getSettings())) {
+        micCtx ??= new AudioContext();
+        void micCtx.resume().catch(() => {});
+      }
       try {
         const { url, token } = await api<{ url: string; token: string }>('POST', `/channels/${id}/voice-token`);
         const room = new Room({
@@ -216,19 +224,38 @@ export function useVoice(gateway: Gateway) {
     [gateway, leave, muted, rerender, addFloating],
   );
 
-  /** Coloca o processamento (volume de entrada, sensibilidade, aperte para falar) no microfone publicado. */
+  /**
+   * Processamento do microfone (volume de entrada, sensibilidade manual, aperte para falar).
+   * Só entra quando alguma dessas opções está ligada: no padrão o microfone vai direto,
+   * do jeito que funcionava antes das configurações. Se o áudio do navegador não estiver
+   * rodando, desiste e deixa o microfone direto em vez de mandar silêncio.
+   */
   const attachMicProcessor = async (room: Room) => {
     const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack as LocalAudioTrack | undefined;
-    if (!track || track.getProcessor()) return;
+    if (!track) return;
+    const wanted = needsMicProcessor(getSettings());
+    const current = track.getProcessor();
     try {
+      if (!wanted) {
+        if (current) await track.stopProcessor();
+        activeMic = null;
+        return;
+      }
+      if (current) return;
       micCtx ??= new AudioContext();
-      if (micCtx.state === 'suspended') await micCtx.resume().catch(() => {});
+      if (micCtx.state !== 'running') await Promise.race([micCtx.resume(), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
+      if (micCtx.state !== 'running') {
+        console.warn('Áudio do navegador parado: microfone vai sem processamento');
+        return;
+      }
       await track.setAudioContext(micCtx);
       const proc = new MicProcessor();
       await track.setProcessor(proc);
       activeMic = proc;
     } catch (e) {
-      console.warn('Processamento do microfone indisponível', e);
+      console.warn('Processamento do microfone indisponível, usando o microfone direto', e);
+      activeMic = null;
+      await track.stopProcessor().catch(() => {});
     }
   };
 
@@ -259,6 +286,7 @@ export function useVoice(gateway: Gateway) {
           const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack as LocalAudioTrack | undefined;
           await track?.restartTrack(micConstraints(s));
         }
+        if (needsMicProcessor(s) !== needsMicProcessor(before)) await attachMicProcessor(room);
       } catch (e) {
         console.warn('Não deu para trocar o dispositivo', e);
       }

@@ -234,7 +234,7 @@ function VideoSettings() {
     let stream: MediaStream | null = null;
     let cancelled = false;
     navigator.mediaDevices
-      .getUserMedia({ video: { deviceId: s.videoDeviceId ? { exact: s.videoDeviceId } : undefined, width: 1280, height: 720 } })
+      .getUserMedia({ video: { deviceId: s.videoDeviceId ? { ideal: s.videoDeviceId } : undefined, width: 1280, height: 720 } })
       .then((st) => {
         if (cancelled) return st.getTracks().forEach((t) => t.stop());
         stream = st;
