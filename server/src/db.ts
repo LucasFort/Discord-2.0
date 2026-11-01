@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS messages (
   edited_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS messages_channel ON messages(channel_id, id);
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  emoji TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (message_id, user_id, emoji)
+);
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -148,7 +155,10 @@ export type Message = {
   created_at: number;
   edited_at: number | null;
   author: User;
+  reactions: Reaction[];
 };
+/** Uma reação agrupada: o emoji e quem reagiu com ele. */
+export type Reaction = { emoji: string; user_ids: string[] };
 
 export const getUser = async (id: string) =>
   (await get('SELECT id, username, display_name FROM users WHERE id = ?', id)) as User | undefined;
@@ -184,19 +194,37 @@ function rowToMessage(r: Row): Message {
     created_at: r.created_at,
     edited_at: r.edited_at ?? null,
     author: { id: r.author_id, username: r.username, display_name: r.display_name },
+    reactions: [],
   };
+}
+
+/** Preenche as reações de várias mensagens com uma consulta só. */
+async function withReactions(msgs: Message[]): Promise<Message[]> {
+  if (!msgs.length) return msgs;
+  const rows = await all(
+    `SELECT message_id, user_id, emoji FROM reactions WHERE message_id IN (${msgs.map(() => '?').join(', ')}) ORDER BY created_at`,
+    ...msgs.map((m) => m.id),
+  );
+  const byId = new Map(msgs.map((m) => [m.id, m]));
+  for (const r of rows) {
+    const m = byId.get(r.message_id)!;
+    let group = m.reactions.find((x) => x.emoji === r.emoji);
+    if (!group) m.reactions.push((group = { emoji: r.emoji, user_ids: [] }));
+    group.user_ids.push(r.user_id);
+  }
+  return msgs;
 }
 
 export const getMessage = async (id: string) => {
   const r = await get(`${MESSAGE_SELECT} WHERE m.id = ?`, id);
-  return r && rowToMessage(r);
+  return r ? (await withReactions([rowToMessage(r)]))[0] : undefined;
 };
 
 export async function listMessages(channelId: string, before: string | undefined, limit: number): Promise<Message[]> {
   const rows = before
     ? await all(`${MESSAGE_SELECT} WHERE m.channel_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`, channelId, before, limit)
     : await all(`${MESSAGE_SELECT} WHERE m.channel_id = ? ORDER BY m.id DESC LIMIT ?`, channelId, limit);
-  return rows.map(rowToMessage).reverse();
+  return withReactions(rows.map(rowToMessage).reverse());
 }
 
 /** Full guild payload sent to clients. */

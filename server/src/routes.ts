@@ -8,6 +8,9 @@ import {
 } from './db.js';
 import { isOnline, sendToGuild, sendToUser } from './gateway.js';
 
+/** Emojis aceitos nas reações (o mesmo conjunto aparece no site). */
+const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
+
 /** Payload do servidor + quem está online agora (para a lista de membros já abrir certa). */
 const withPresence = <T extends { members: { id: string }[] }>(g: T) => ({ ...g, online: g.members.filter((m) => isOnline(m.id)).map((m) => m.id) });
 
@@ -214,6 +217,25 @@ export function registerRoutes(app: FastifyInstance) {
       await run('DELETE FROM messages WHERE id = ?', id);
       await sendToGuild(ch.guild_id, 'MESSAGE_DELETE', { id, channel_id: ch.id });
       return { ok: true };
+    });
+
+    // ---------- Reações ----------
+    api.put('/api/messages/:id/reactions/:emoji', messageLimit, async (req, reply) => {
+      const { id, emoji } = req.params as { id: string; emoji: string };
+      if (!REACTIONS.includes(emoji)) return reply.code(400).send({ error: 'Reação inválida' });
+      const msg = await getMessage(id);
+      const ch = msg && (await getChannel(msg.channel_id));
+      if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const on = (req.body as { on?: boolean } | undefined)?.on !== false;
+      if (on)
+        await run(
+          'INSERT INTO reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
+          id, req.user.id, emoji, Date.now(),
+        );
+      else await run('DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', id, req.user.id, emoji);
+      const updated = (await getMessage(id))!;
+      await sendToGuild(ch.guild_id, 'MESSAGE_UPDATE', updated);
+      return updated;
     });
 
     // ---------- Voz, câmera e transmissão de tela ----------

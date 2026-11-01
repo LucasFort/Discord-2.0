@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Track } from 'livekit-client';
 import {
-  Expand, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  Bell, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
 } from 'lucide-react';
-import { api, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { api, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
+import { useToasts } from './toast';
 import { useStore, type Gateway, type State } from './store';
-import { QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
+import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
 export function App() {
   const [authed, setAuthed] = useState(!!getToken());
@@ -71,6 +73,12 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
+  const [sounds, setSounds] = useState(soundsEnabled);
+  const toggleSounds = () => {
+    setSoundsEnabled(!sounds);
+    setSounds(!sounds);
+    if (!sounds) playSound('join');
+  };
 
   const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
@@ -142,6 +150,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             me={state.user}
             activeId={view === 'voice' ? voice.channelId : textChannel?.id}
             onOpen={openChannel}
+            voiceSpeaking={new Set(voice.users.filter((u) => u.speaking).map((u) => u.identity))}
           />
         ) : (
           <div className="empty">Crie um servidor ou entre com um convite.</div>
@@ -159,6 +168,9 @@ function Main({ onLogout }: { onLogout: () => void }) {
           <button className={`icon ${voice.deafened ? 'danger' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
             {voice.deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
           </button>
+          <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
+            {sounds ? <Bell size={18} /> : <BellOff size={18} />}
+          </button>
           <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
         </div>
       </aside>
@@ -174,13 +186,21 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </main>
 
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
+      <Toasts />
     </div>
   );
 }
 
 // ---------------------------------------------------------------- Canais
-function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: string | null; onOpen: (c: Channel) => void }) {
-  const { guild, state, me, activeId, onOpen } = props;
+function ChannelList(props: {
+  guild: Guild;
+  state: State;
+  me: User;
+  activeId?: string | null;
+  onOpen: (c: Channel) => void;
+  voiceSpeaking?: Set<string>;
+}) {
+  const { guild, state, me, activeId, onOpen, voiceSpeaking } = props;
   const isOwner = guild.owner_id === me.id;
   const add = async (type: 'text' | 'voice') => {
     const name = prompt(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz');
@@ -209,7 +229,7 @@ function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: s
               guild.members
                 .filter((m) => state.voice[m.id] === c.id)
                 .map((m) => (
-                  <div key={m.id} className="voice-member">
+                  <div key={m.id} className={`voice-member ${voiceSpeaking?.has(m.id) ? 'speaking' : ''}`}>
                     <Avatar user={m} size={20} /> {m.display_name}
                   </div>
                 ))}
@@ -314,7 +334,7 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
         {messages?.map((m, i) => {
           const prev = messages[i - 1];
           const grouped = prev && prev.author.id === m.author.id && m.created_at - prev.created_at < 5 * 60_000;
-          return <MessageRow key={m.id} msg={m} grouped={!!grouped} mine={m.author.id === state.user?.id} />;
+          return <MessageRow key={m.id} msg={m} grouped={!!grouped} mine={m.author.id === state.user?.id} me={state.user!.id} members={state.guilds.find((g) => g.id === channel.guild_id)?.members ?? []} />;
         })}
       </div>
       <form className="composer" onSubmit={send}>
@@ -325,8 +345,16 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
   );
 }
 
-function MessageRow({ msg, grouped, mine }: { msg: Message; grouped: boolean; mine: boolean }) {
+function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped: boolean; mine: boolean; me: string; members: User[] }) {
   const time = new Date(msg.created_at);
+  const [picker, setPicker] = useState(false);
+  const react = async (emoji: string) => {
+    setPicker(false);
+    const on = !msg.reactions?.find((r) => r.emoji === emoji)?.user_ids.includes(me);
+    if (on) playSound('reaction');
+    await api('PUT', `/messages/${msg.id}/reactions/${encodeURIComponent(emoji)}`, { on }).catch((e) => alert(e.message));
+  };
+  const names = (ids: string[]) => ids.map((id) => members.find((m) => m.id === id)?.display_name ?? '?').join(', ');
   const edit = async () => {
     const content = prompt('Editar mensagem', msg.content);
     if (content && content !== msg.content) await api('PATCH', `/messages/${msg.id}`, { content });
@@ -348,8 +376,30 @@ function MessageRow({ msg, grouped, mine }: { msg: Message; grouped: boolean; mi
           <Markdown text={msg.content} />
           {msg.edited_at && <small className="edited"> (editado)</small>}
         </div>
+        {!!msg.reactions?.length && (
+          <div className="reactions">
+            {msg.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                className={`reaction ${r.user_ids.includes(me) ? 'mine' : ''}`}
+                title={`Reagiram com ${r.emoji}: ${names(r.user_ids)}`}
+                onClick={() => react(r.emoji)}
+              >
+                <span className="reaction-emoji">{r.emoji}</span> {r.user_ids.length}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+      {picker && (
+        <div className="emoji-picker" onMouseLeave={() => setPicker(false)}>
+          {REACTIONS.map((e) => (
+            <button key={e} onClick={() => react(e)}>{e}</button>
+          ))}
+        </div>
+      )}
       <div className="message-actions">
+        <button className="icon small" title="Reagir" onClick={() => setPicker((p) => !p)}><SmilePlus size={16} /></button>
         {mine && <button className="icon small" title="Editar" onClick={edit}><Pencil size={16} /></button>}
         <button className="icon small" title="Apagar" onClick={remove}><Trash2 size={16} /></button>
       </div>
@@ -396,6 +446,7 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
 
 function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }) {
   const [shareOpen, setShareOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
   const streams = voice.users.filter((u) => u.isSharing);
   const focused = streams.find((u) => u.identity === focus && u.screen);
@@ -431,7 +482,27 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
           ))}
         </div>
       )}
+      <div className="floating-layer" aria-hidden>
+        {voice.floating.map((f) => (
+          <div key={f.id} className="floating" style={{ left: `${f.left}%` }}>
+            <span>{f.emoji}</span>
+            {f.name && <small>{f.name}</small>}
+          </div>
+        ))}
+      </div>
       <div className="controls">
+        <div className="call-reactions">
+          <button className={`round ${emojiOpen ? 'on' : ''}`} title="Reagir na call" onClick={() => setEmojiOpen((o) => !o)}>
+            <SmilePlus size={22} />
+          </button>
+          {emojiOpen && (
+            <div className="emoji-picker up">
+              {CALL_EMOJIS.map((e) => (
+                <button key={e} onClick={() => voice.sendReaction(e)}>{e}</button>
+              ))}
+            </div>
+          )}
+        </div>
         <button className={`round ${voice.muted ? 'off' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
           {voice.muted ? <MicOff size={22} /> : <Mic size={22} />}
         </button>
@@ -530,6 +601,17 @@ function VideoTrack({ track, contain, mirror }: { track: Track; contain?: boolea
     return () => void track.detach(el);
   }, [track]);
   return <video ref={ref} className={`${contain ? 'contain' : ''} ${mirror ? 'mirror' : ''}`} autoPlay playsInline muted />;
+}
+
+function Toasts() {
+  const list = useToasts();
+  return (
+    <div className="toasts">
+      {list.map((t) => (
+        <div key={t.id} className={`toast ${t.kind ?? ''}`}>{t.text}</div>
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- Utilitários

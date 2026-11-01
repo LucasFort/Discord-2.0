@@ -8,7 +8,12 @@ export type Message = {
   created_at: number;
   edited_at: number | null;
   author: User;
+  reactions?: Reaction[];
 };
+export type Reaction = { emoji: string; user_ids: string[] };
+
+/** Emojis das reações (o servidor aceita só estes). */
+export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
 
 /** Nome do app: troque à vontade, só evite marcas de terceiros. */
 export const APP_NAME = 'Nexo';
