@@ -30,9 +30,15 @@ Abra http://localhost:5173, crie uma conta e um servidor. Para testar a transmis
 
 Sem Docker: baixe o binário em https://github.com/livekit/livekit/releases e rode `livekit-server --dev`.
 
-### Testar com amigos em outra rede
+## Colocar online (Render + LiveKit Cloud, plano grátis)
 
-Em dev tudo roda em `localhost`. Para outras pessoas entrarem você precisa publicar a API, o site e o LiveKit com HTTPS (o navegador só libera microfone e tela em HTTPS). O caminho mais curto é usar o **LiveKit Cloud** (tem plano gratuito): crie um projeto e coloque `LIVEKIT_URL`, `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET` no `.env`.
+Em produção a API também entrega o site, então é um único serviço (veja o `Dockerfile`). Voz e tela ficam no LiveKit Cloud.
+
+1. **LiveKit Cloud:** crie uma conta em https://cloud.livekit.io e um projeto. Em *Settings > Keys* crie uma chave e anote três valores: a URL do projeto (começa com `wss://`), a API Key e o API Secret.
+2. **Render:** crie uma conta em https://render.com entrando com o GitHub. Clique em **New > Blueprint**, escolha o repositório `Discord-2.0` e confirme. O Render lê o `render.yaml` e pede `LIVEKIT_URL`, `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET`: cole os valores do passo 1.
+3. Espere o deploy terminar (alguns minutos) e abra o endereço `https://nexo-xxxx.onrender.com` que o Render mostrar. Já vem com HTTPS, que o navegador exige para microfone e tela.
+
+Limites do plano grátis do Render: o serviço dorme depois de 15 minutos sem uso (o primeiro acesso demora uns 50 segundos) e o banco SQLite é apagado a cada deploy ou reinício. Serve para testar; para guardar dados de verdade, use um disco pago no Render ou troque para PostgreSQL.
 
 ## Estrutura
 

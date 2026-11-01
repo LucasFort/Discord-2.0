@@ -1,0 +1,16 @@
+# Blueprint do Render: New > Blueprint e escolha este repositório.
+services:
+  - type: web
+    name: nexo
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: LIVEKIT_URL      # do LiveKit Cloud, começa com wss://
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
