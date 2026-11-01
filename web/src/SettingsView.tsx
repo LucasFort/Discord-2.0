@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
-import { MicProcessor } from './mic';
+import { MicProcessor, newAudioContext } from './mic';
 import { keyName, micConstraints, updateSettings, useSettings, type Settings } from './settings';
 import { activeMic } from './voice';
 import { setSoundsEnabled, soundsEnabled, playSound } from './sounds';
@@ -87,7 +87,7 @@ function useMicTest(on: boolean, loopback: boolean, s: Settings) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(s) as MediaTrackConstraints });
         if (cancelled) return stream.getTracks().forEach((t) => t.stop());
-        ctx = new AudioContext();
+        ctx = newAudioContext();
         await p.init({ kind: 'audio' as never, track: stream.getAudioTracks()[0], audioContext: ctx });
         proc.current = p;
         setError('');
@@ -242,7 +242,13 @@ function VoiceSettings() {
 
       <h3>Processamento de voz</h3>
       <Toggle label="Amplificar microfone baixo automaticamente" hint="Aumenta sozinho o volume de microfones fracos para todo mundo te ouvir." checked={s.autoBoost} onChange={(v) => updateSettings({ autoBoost: v })} />
-      <Toggle label="Supressão de ruído" hint="Corta barulho de fundo como ventilador e teclado." checked={s.noiseSuppression} onChange={(v) => updateSettings({ noiseSuppression: v })} />
+      <Toggle
+        label="Supressão de ruído forte (IA)"
+        hint="Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise)."
+        checked={s.strongNoiseSuppression}
+        onChange={(v) => updateSettings({ strongNoiseSuppression: v })}
+      />
+      <Toggle label="Supressão de ruído do navegador" hint="A supressão básica do navegador. Pode deixar ligada junto com a forte." checked={s.noiseSuppression} onChange={(v) => updateSettings({ noiseSuppression: v })} />
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
       <Toggle label="Controle automático de ganho" hint="Ajusta o volume do microfone sozinho." checked={s.autoGainControl} onChange={(v) => updateSettings({ autoGainControl: v })} />
     </>
