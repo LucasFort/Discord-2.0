@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { AccessToken, TrackSource } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import { requireAuth, signSession } from './auth.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser,
@@ -9,7 +9,7 @@ import {
 import { sendToGuild, sendToUser } from './gateway.js';
 
 // Valores colados em painéis de deploy costumam vir com espaço ou quebra de linha: limpamos tudo.
-const env = (k: string) => process.env[k]?.trim() || undefined;
+const env = (k: string) => process.env[k]?.trim().replace(/^["']|["']$/g, '').trim() || undefined;
 /** Aceita "wss://x", "https://x" ou só "x.livekit.cloud" e devolve sempre ws(s)://. */
 export function normalizeLivekitUrl(raw: string | undefined): string {
   const url = (raw ?? 'ws://localhost:7880').replace(/\/+$/, '');
@@ -37,7 +37,29 @@ function bad(message: string) {
 
 export function registerRoutes(app: FastifyInstance) {
   // Diagnóstico sem segredos: mostra se a voz está configurada e para onde o cliente vai conectar.
-  app.get('/api/voice-config', async () => ({ configured: livekitConfigured, url: LIVEKIT_URL }));
+  // Também testa a chave de verdade no LiveKit (lista as salas) e mostra só pistas que não são segredo.
+  app.get('/api/voice-config', async () => {
+    let credentials: 'ok' | 'invalid' | 'unreachable' | 'not-tested' = 'not-tested';
+    let detail: string | undefined;
+    if (livekitConfigured) {
+      try {
+        await new RoomServiceClient(LIVEKIT_URL.replace(/^ws/i, 'http'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET).listRooms();
+        credentials = 'ok';
+      } catch (e) {
+        detail = (e as Error).message.replace(/eyJ[\w.-]+/g, '…'); // nunca devolver o token
+        credentials = /401|unauthor|invalid|token|permission/i.test(detail) ? 'invalid' : 'unreachable';
+      }
+    }
+    return {
+      configured: livekitConfigured,
+      url: LIVEKIT_URL,
+      credentials,
+      detail,
+      apiKeyStartsWith: LIVEKIT_API_KEY.slice(0, 3), // chaves do LiveKit começam com "API"
+      apiKeyLength: LIVEKIT_API_KEY.length,
+      apiSecretLength: LIVEKIT_API_SECRET.length,
+    };
+  });
 
   // ---------- Contas ----------
   // Limite contra força bruta: 10 tentativas por minuto por IP.
