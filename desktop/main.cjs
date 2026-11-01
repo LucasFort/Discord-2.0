@@ -14,6 +14,13 @@ const APP_ORIGIN = new URL(APP_URL).origin;
 
 let win = null;
 
+// Quando um jogo em tela cheia cobre o Nexo, o Windows avisa que a janela está "escondida" e o
+// Chromium desacelera a página, e a transmissão e as chamadas travam. Desliga essa economia.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on('second-instance', () => {
   if (!win) return;

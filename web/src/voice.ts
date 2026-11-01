@@ -138,7 +138,13 @@ export function useVoice(gateway: Gateway) {
             autoSubscribe(pub);
             rerender();
           })
-          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, p) => {
+          .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub, p) => {
+            // Transmissão: guarda um pouco mais de vídeo antes de mostrar (~150 ms). Absorve as
+            // oscilações da internet de quem assiste, e a imagem não fica dando trancos.
+            if (pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio) {
+              const r = track.receiver as (RTCRtpReceiver & { jitterBufferTarget?: number | null }) | undefined;
+              try { if (r && 'jitterBufferTarget' in r) r.jitterBufferTarget = 150; } catch { /* navegador sem suporte */ }
+            }
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
               (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, deafRef.current));
@@ -341,7 +347,9 @@ export function useVoice(gateway: Gateway) {
         audio: opts.audio,
         systemAudio: opts.audio ? 'include' : 'exclude',
         resolution: q.width ? { width: q.width, height: q.height!, frameRate: q.fps } : undefined,
-        contentHint: opts.optimizeFor,
+        // Sempre "motion": com "detail" o Chrome trata como apresentação e, quando falta CPU ou
+        // internet, pula quadros em vez de baixar a resolução, o que dá a sensação de travada.
+        contentHint: 'motion',
         selfBrowserSurface: 'exclude',
         surfaceSwitching: 'include',
       },
@@ -352,7 +360,7 @@ export function useVoice(gateway: Gateway) {
         // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
         simulcast: false,
         screenShareEncoding: { maxBitrate: q.bitrate, maxFramerate: q.fps, priority: 'high' },
-        // Texto: equilibra resolução e fps (antes segurava só a resolução e o fps despencava).
+        // Equilibrado: divide a perda entre resolução e fps.
         // Jogo/vídeo: segura o fps e reduz a resolução quando a internet ou a CPU não dão conta.
         degradationPreference: opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate',
       },
