@@ -14,9 +14,24 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Lista de membros online e offline
 - Voz: entrar e sair, silenciar, ensurdecer, indicador de quem está falando, supressão de ruído e cancelamento de eco, lista de quem está em cada canal de voz na barra lateral
 - Câmera
-- **Transmissão de tela**: escolha de tela, janela ou aba; qualidade 720p30, 1080p30, 1080p60 ou original 60 fps; "texto nítido" ou "movimento fluido"; áudio da transmissão; quem está na sala vê "AO VIVO" e só recebe o vídeo depois de clicar em **Assistir transmissão**; ampliar e tela cheia
+- **Transmissão de tela**: escolha de tela, janela ou aba; qualidade 720p30, 1080p30, 1080p60 ou original 60 fps; "equilibrado" ou "movimento fluido (jogos)"; áudio da transmissão; botão de estatísticas (fps, resolução, perda e se o limite é a CPU ou a internet); quem está na sala vê "AO VIVO" e só recebe o vídeo depois de clicar em **Assistir transmissão**; ampliar e tela cheia
 
 Testado ponta a ponta com dois navegadores: chat, voz e transmissão 1080p chegando no espectador.
+
+## App para computador
+
+O app (pasta `desktop/`, feito em Electron) abre o Nexo numa janela própria e adiciona:
+- seletor de tela ou janela com miniaturas na hora de transmitir;
+- áudio do computador na transmissão (Windows);
+- links externos abrindo no navegador.
+
+**Para baixar:** https://github.com/LucasFort/Discord-2.0/releases/latest (Windows `.exe`, Linux `.AppImage`). Mande esse link para os amigos.
+
+O instalador é gerado sozinho pelo GitHub Actions (`.github/workflows/desktop.yml`) sempre que algo em `desktop/` muda na `main`. Para lançar uma versão nova, aumente `version` em `desktop/package.json`. O app carrega o site do Render (`nexoUrl` no mesmo arquivo), então melhorias no site chegam no app sem precisar baixar de novo.
+
+O Windows mostra "O Windows protegeu o computador" na primeira vez porque o app não tem assinatura digital (paga). Clique em **Mais informações > Executar assim mesmo**.
+
+Rodar o app em desenvolvimento: `cd desktop && npm install && npm start` (use `NEXO_URL=http://localhost:5173 npm start` para apontar para o site local).
 
 ## Como rodar
 
@@ -74,4 +89,4 @@ web/src/
 
 ## Próximos passos (fase 2 do roadmap)
 
-Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, app desktop em Electron (seletor de janela próprio e áudio do sistema), troca do SQLite por PostgreSQL.
+Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, atualização automática do app de computador, versão para Mac.

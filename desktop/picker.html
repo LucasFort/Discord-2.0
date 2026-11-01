@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Escolha o que transmitir</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #171b24; color: #e6e9f2; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 16px 20px 8px; }
+  h1 { font-size: 18px; margin: 0 0 10px; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { border: 0; border-radius: 8px; padding: 7px 14px; background: #232937; color: #aab1c3; cursor: pointer; font: inherit; }
+  .tabs button.on { background: #7c5cff; color: white; }
+  main { flex: 1; overflow: auto; padding: 12px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; align-content: start; }
+  .src { border: 2px solid transparent; border-radius: 12px; background: #1e2330; padding: 8px; cursor: pointer; text-align: left; color: inherit; font: inherit; }
+  .src:hover { border-color: #3a4256; }
+  .src.sel { border-color: #7c5cff; }
+  .src img.thumb { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; border-radius: 8px; display: block; }
+  .name { display: flex; align-items: center; gap: 6px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name img { width: 16px; height: 16px; }
+  footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #262c3a; }
+  footer button { border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer; font: inherit; }
+  #cancel { background: none; color: #a78bfa; }
+  #go { background: #7c5cff; color: white; }
+  #go:disabled { opacity: .4; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Escolha o que transmitir</h1>
+  <div class="tabs"><button id="t-screen" class="on">Telas</button><button id="t-window">Janelas</button></div>
+</header>
+<main id="list"></main>
+<footer><button id="cancel">Cancelar</button><button id="go" disabled>Transmitir</button></footer>
+<script>
+  let all = [], tab = 'screen', sel = null;
+  const list = document.getElementById('list'), go = document.getElementById('go');
+  function render() {
+    list.textContent = '';
+    for (const s of all.filter((s) => (tab === 'screen') === s.screen)) {
+      const b = document.createElement('button');
+      b.className = 'src' + (s.id === sel ? ' sel' : '');
+      if (s.thumbnail) { const img = document.createElement('img'); img.className = 'thumb'; img.src = s.thumbnail; b.appendChild(img); }
+      const n = document.createElement('div'); n.className = 'name';
+      if (s.icon) { const i = document.createElement('img'); i.src = s.icon; n.appendChild(i); }
+      n.appendChild(document.createTextNode(s.name));
+      b.appendChild(n);
+      b.onclick = () => { sel = s.id; go.disabled = false; render(); };
+      b.ondblclick = () => window.picker.choose(s.id);
+      list.appendChild(b);
+    }
+  }
+  function setTab(t) { tab = t; document.getElementById('t-screen').className = t === 'screen' ? 'on' : ''; document.getElementById('t-window').className = t === 'window' ? 'on' : ''; render(); }
+  document.getElementById('t-screen').onclick = () => setTab('screen');
+  document.getElementById('t-window').onclick = () => setTab('window');
+  document.getElementById('cancel').onclick = () => window.picker.choose(null);
+  go.onclick = () => sel && window.picker.choose(sel);
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && window.picker.choose(null));
+  window.picker.sources().then((s) => { all = s; if (all.length === 1) sel = all[0].id, go.disabled = false; render(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+# Gera o app de computador (Electron) e publica numa Release do GitHub.
+# Roda sozinho quando algo em desktop/ muda na main, ou pelo botão "Run workflow" na aba Actions.
+# Link fixo para baixar: https://github.com/LucasFort/Discord-2.0/releases/latest
+name: App desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "tag=app-v$(node -p "require('./desktop/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cria a release (se ainda não existe)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$GITHUB_SHA" --title "Nexo para computador ${TAG#app-v}" \
+            --notes "Baixe o arquivo do seu sistema em **Assets** logo abaixo.
+
+          - **Windows:** \`Nexo-…-win-x64.exe\`. Abra e ele instala sozinho. Se aparecer \"O Windows protegeu o computador\", clique em **Mais informações > Executar assim mesmo** (o app ainda não tem assinatura digital paga).
+          - **Linux:** \`Nexo-…-linux-x86_64.AppImage\`. Dê permissão de execução e abra."
+
+  build:
+    needs: release
+    # Em pull request só testa o build (release é pulada); na main publica.
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexo-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+          if-no-files-found: error
+      - name: Envia para a release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          gh release upload "$TAG" dist/*.exe dist/*.AppImage dist/*.yml dist/*.blockmap --clobber

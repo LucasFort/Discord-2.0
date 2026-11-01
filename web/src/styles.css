@@ -220,3 +220,11 @@ button.round:active { transform: scale(.9); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+.stream-stats { position: absolute; left: 10px; top: 10px; z-index: 3; max-width: calc(100% - 20px); padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, .65); color: #e6e9f2; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
+.stream-stats .warn { color: var(--warn); }
+button.icon.active { color: var(--accent-2); }
+.stage .stream-stats { top: auto; bottom: 12px; left: 12px; }
+.modal.ask { width: min(440px, calc(100vw - 32px)); display: grid; gap: 14px; }
+.modal.ask h2 { margin: 0; font-size: 18px; }
+.modal.ask .modal-actions { margin-top: 0; }
