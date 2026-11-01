@@ -264,6 +264,8 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 .meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--text-muted); transition: width .05s linear; border-radius: 999px; }
 .meter.open .meter-fill { background: var(--ok); }
 .meter-mark { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--warn); border-radius: 2px; }
+.meter-info { margin-top: -6px; }
+.warn-box { background: rgba(245, 184, 75, .1); border: 1px solid rgba(245, 184, 75, .4); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
 .keybind { min-width: 160px; justify-content: center; border: 1px solid var(--line); background: var(--bg-0); }
 .keybind.capturing { border-color: var(--danger); color: var(--danger); animation: speak 1s ease-in-out infinite; }
 .camera-preview { aspect-ratio: 16 / 9; max-width: 520px; border-radius: 14px; overflow: hidden; background: #000; display: grid; place-items: center; }
@@ -282,5 +284,3 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
   .settings-close small { display: none; }
   .field-row { grid-template-columns: 1fr; }
 }
-.meter-info { margin-top: -6px; }
-.warn-box { background: rgba(245, 184, 75, .1); border: 1px solid rgba(245, 184, 75, .4); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
