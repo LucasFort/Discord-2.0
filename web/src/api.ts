@@ -1,6 +1,7 @@
 export type User = { id: string; username: string; display_name: string };
 export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number };
-export type Guild = { id: string; name: string; owner_id: string; channels: Channel[]; members: User[] };
+export type Guild = { id: string; name: string; owner_id: string; is_dm?: number; channels: Channel[]; members: User[] };
+export type Relationship = { user: User; type: 'friend' | 'outgoing' | 'incoming' };
 export type Message = {
   id: string;
   channel_id: string;

@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { userFromToken } from './auth.js';
-import { getChannel, guildPayload, guildsOf, isMember, memberIds, type User } from './db.js';
+import { friendIds, getChannel, guildPayload, guildsOf, isMember, memberIds, relationshipsOf, type User } from './db.js';
 
 /**
  * Real-time gateway. One WebSocket per open client tab.
@@ -22,9 +22,12 @@ export async function sendToGuild(guildId: string, t: string, d: unknown) {
 
 export const isOnline = (userId: string) => (sockets.get(userId)?.size ?? 0) > 0;
 
+/** Avisa todo mundo que conhece a pessoa (mesmos servidores ou amigos), uma vez só por pessoa. */
 async function broadcastPresence(user: User) {
   const status = isOnline(user.id) ? 'online' : 'offline';
-  for (const g of await guildsOf(user.id)) await sendToGuild(g.id, 'PRESENCE_UPDATE', { user_id: user.id, status });
+  const to = new Set(await friendIds(user.id));
+  for (const g of await guildsOf(user.id)) for (const id of await memberIds(g.id)) to.add(id);
+  for (const id of to) sendToUser(id, 'PRESENCE_UPDATE', { user_id: user.id, status });
 }
 
 async function setVoiceState(user: User, channelId: string | null) {
@@ -58,7 +61,8 @@ export function registerGateway(app: FastifyInstance) {
       sockets.set(user.id, set);
 
       const guilds = await Promise.all((await guildsOf(user.id)).map(guildPayload));
-      const visible = new Set(guilds.flatMap((g) => g.members.map((m) => m.id)));
+      const relationships = await relationshipsOf(user.id);
+      const visible = new Set([...guilds.flatMap((g) => g.members.map((m) => m.id)), ...relationships.map((r) => r.user.id)]);
       if (ws.readyState !== 1) return;
       ws.send(
         JSON.stringify({
@@ -66,6 +70,7 @@ export function registerGateway(app: FastifyInstance) {
           d: {
             user,
             guilds,
+            relationships,
             presences: [...visible].filter(isOnline).map((id) => ({ user_id: id, status: 'online' })),
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))
