@@ -10,7 +10,7 @@ import {
   RemoteAudioTrack,
   type LocalAudioTrack,
 } from 'livekit-client';
-import { MicProcessor } from './mic';
+import { MicProcessor, newAudioContext } from './mic';
 import { getSettings, micConstraints, onSettings, type Settings } from './settings';
 import { api } from './api';
 import { playSound } from './sounds';
@@ -27,7 +27,7 @@ export let activeMic: MicProcessor | null = null;
 let micCtx: AudioContext | null = null;
 
 /** O microfone só passa pelo processamento quando alguma opção precisa dele. */
-const needsMicProcessor = (s: Settings) => s.autoBoost || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
+const needsMicProcessor = (s: Settings) => s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
 
 /** Volume final de cada pessoa: volume geral × volume dela (no máximo 100%). */
 function volumeFor(identity: string, deaf: boolean, s: Settings = getSettings()) {
@@ -117,7 +117,7 @@ export function useVoice(gateway: Gateway) {
       setConnecting(true);
       // Cria o áudio ainda dentro do clique (o navegador só libera som que começa num clique).
       if (needsMicProcessor(getSettings())) {
-        micCtx ??= new AudioContext();
+        micCtx ??= newAudioContext();
         void micCtx.resume().catch(() => {});
       }
       try {
@@ -242,7 +242,7 @@ export function useVoice(gateway: Gateway) {
         return;
       }
       if (current) return;
-      micCtx ??= new AudioContext();
+      micCtx ??= newAudioContext();
       if (micCtx.state !== 'running') await Promise.race([micCtx.resume(), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
       if (micCtx.state !== 'running') {
         console.warn('Áudio do navegador parado: microfone vai sem processamento');

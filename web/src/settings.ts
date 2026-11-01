@@ -12,6 +12,7 @@ export type Settings = {
   echoCancellation: boolean;
   autoGainControl: boolean;
   autoBoost: boolean; // amplifica sozinho microfone baixo
+  strongNoiseSuppression: boolean; // RNNoise (tira chiado e barulho de fundo)
   inputMode: 'voice' | 'ptt';
   pttKey: string; // KeyboardEvent.code, ex.: 'KeyV'
   pttReleaseDelay: number; // ms
@@ -30,6 +31,7 @@ const DEFAULTS: Settings = {
   echoCancellation: true,
   autoGainControl: true,
   autoBoost: true,
+  strongNoiseSuppression: true,
   inputMode: 'voice',
   pttKey: '',
   pttReleaseDelay: 200,
