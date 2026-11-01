@@ -14,6 +14,8 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Lista de membros online e offline
 - Voz: entrar e sair, silenciar, ensurdecer, indicador de quem está falando, supressão de ruído e cancelamento de eco, lista de quem está em cada canal de voz na barra lateral
 - Câmera
+- **Configurações** (engrenagem ao lado do seu nome ou na call): escolher microfone, saída de som e câmera; volume de entrada e de saída; teste de microfone com medidor e "ouvir minha voz"; detecção de voz com sensibilidade automática ou manual; aperte para falar com tecla e atraso ao soltar; supressão de ruído, cancelamento de eco e ganho automático; prévia da câmera. Ficam salvas no computador de cada um.
+- Volume de cada pessoa na call (passe o mouse no quadrado dela)
 - **Transmissão de tela**: escolha de tela, janela ou aba; qualidade 720p30, 1080p30, 1080p60 ou original 60 fps; "equilibrado" ou "movimento fluido (jogos)"; áudio da transmissão; botão de estatísticas (fps, resolução, perda e se o limite é a CPU ou a internet); quem está na sala vê "AO VIVO" e só recebe o vídeo depois de clicar em **Assistir transmissão**; ampliar e tela cheia
 
 Testado ponta a ponta com dois navegadores: chat, voz e transmissão 1080p chegando no espectador.

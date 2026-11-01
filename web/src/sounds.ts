@@ -1,11 +1,21 @@
+import { getSettings } from './settings';
+
 /**
  * Sons curtos da call, gerados na hora com Web Audio (sem arquivos de áudio).
  * Entrar: duas notas subindo. Sair: duas notas descendo. Mutar/desmutar: um clique.
  */
 let ctx: AudioContext | null = null;
 
+let sink = '';
 function audio() {
   if (!ctx) ctx = new AudioContext();
+  // Toca os sons no mesmo dispositivo de saída escolhido nas configurações.
+  const wanted = getSettings().outputDeviceId;
+  const c = ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+  if (wanted !== sink && c.setSinkId) {
+    sink = wanted;
+    void c.setSinkId(wanted).catch(() => {});
+  }
   if (ctx.state === 'suspended') void ctx.resume();
   return ctx;
 }

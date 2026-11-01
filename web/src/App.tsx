@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
-  Activity, Bell, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
 } from 'lucide-react';
 import { api, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { useToasts } from './toast';
 import { ask, AskHost } from './ask';
+import { SettingsView } from './SettingsView';
+import { updateSettings, useSettings } from './settings';
 import { useStore, type Gateway, type State } from './store';
 import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
@@ -75,6 +77,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
   const [sounds, setSounds] = useState(soundsEnabled);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleSounds = () => {
     setSoundsEnabled(!sounds);
     setSounds(!sounds);
@@ -172,13 +175,14 @@ function Main({ onLogout }: { onLogout: () => void }) {
           <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
             {sounds ? <Bell size={18} /> : <BellOff size={18} />}
           </button>
+          <button className="icon" title="Configurações" onClick={() => setSettingsOpen(true)}><SettingsIcon size={18} /></button>
           <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
         </div>
       </aside>
 
       <main className="content">
         {view === 'voice' && voice.channelId ? (
-          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} />
+          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onSettings={() => setSettingsOpen(true)} />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
         ) : (
@@ -189,6 +193,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
       <Toasts />
       <AskHost />
+      {settingsOpen && <SettingsView onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }} />}
     </div>
   );
 }
@@ -446,7 +451,8 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   );
 }
 
-function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }) {
+function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelName: string; onSettings: () => void }) {
+  const settings = useSettings();
   const [shareOpen, setShareOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [stageStats, setStageStats] = useState(false);
@@ -483,6 +489,19 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
                 {u.name}
                 {u.isSharing && <span className="live">AO VIVO</span>}
               </div>
+              {!u.isLocal && (
+                <label className="tile-volume" title={`Volume de ${u.name}`}>
+                  <Volume2 size={14} />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={settings.userVolumes[u.identity] ?? 100}
+                    onChange={(e) => updateSettings({ userVolumes: { ...settings.userVolumes, [u.identity]: +e.target.value } })}
+                  />
+                  <small>{settings.userVolumes[u.identity] ?? 100}%</small>
+                </label>
+              )}
             </div>
           ))}
         </div>
@@ -522,6 +541,7 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
         ) : (
           <button className="round accent" title="Transmitir tela" onClick={() => setShareOpen(true)}><MonitorUp size={22} /></button>
         )}
+        <button className="round" title="Configurações de voz" onClick={onSettings}><SettingsIcon size={22} /></button>
         <button className="round danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={22} /></button>
       </div>
       {shareOpen && (
