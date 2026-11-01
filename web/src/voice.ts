@@ -27,7 +27,7 @@ export let activeMic: MicProcessor | null = null;
 let micCtx: AudioContext | null = null;
 
 /** O microfone só passa pelo processamento quando alguma opção precisa dele. */
-const needsMicProcessor = (s: Settings) => s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
+const needsMicProcessor = (s: Settings) => s.autoBoost || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
 
 /** Volume final de cada pessoa: volume geral × volume dela (no máximo 100%). */
 function volumeFor(identity: string, deaf: boolean, s: Settings = getSettings()) {

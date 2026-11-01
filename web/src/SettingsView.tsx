@@ -117,25 +117,49 @@ function useMicTest(on: boolean, loopback: boolean, s: Settings) {
 }
 
 function Meter({ source, s }: { source: () => MicProcessor | null; s: Settings }) {
-  const [level, setLevel] = useState(-100);
-  const [open, setOpen] = useState(false);
+  const [m, setM] = useState({ level: -100, raw: -100, boost: 0, open: false, peak: -100, active: false });
+  const since = useRef(0);
   useEffect(() => {
     let raf = 0;
-    const loop = () => {
-      const p = source();
-      setLevel(p ? p.level : -100);
-      setOpen(!!p?.open);
+    let last = 0;
+    const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
+      if (t - last < 50) return;
+      last = t;
+      const p = source();
+      if (!p) {
+        since.current = 0;
+        return setM({ level: -100, raw: -100, boost: 0, open: false, peak: -100, active: false });
+      }
+      since.current ||= t;
+      setM({ level: p.level, raw: p.rawLevel, boost: p.boostDb, open: p.open, peak: p.speechPeak, active: t - since.current > 4000 });
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [source]);
   const pct = (db: number) => `${Math.max(0, Math.min(100, db + 100))}%`;
+  // Avisos só depois de alguns segundos de teste.
+  const silent = m.active && m.raw <= -99;
+  const quiet = m.active && !silent && m.peak < -60;
   return (
-    <div className={`meter ${open ? 'open' : ''}`}>
-      <div className="meter-fill" style={{ width: pct(level) }} />
-      {s.inputMode === 'voice' && !s.autoSensitivity && <div className="meter-mark" style={{ left: pct(s.sensitivity) }} />}
-    </div>
+    <>
+      <div className={`meter ${m.open ? 'open' : ''}`}>
+        <div className="meter-fill" style={{ width: pct(m.level) }} />
+        {s.inputMode === 'voice' && !s.autoSensitivity && <div className="meter-mark" style={{ left: pct(s.sensitivity) }} />}
+      </div>
+      <small className="muted meter-info">
+        {m.raw > -100 ? `Microfone: ${Math.round(m.raw)} dB` : 'Sem sinal'}
+        {m.boost >= 1 && ` · amplificando +${Math.round(m.boost)} dB`}
+        {m.open ? ' · enviando' : ''}
+      </small>
+      {silent && <p className="warn-box">Nenhum som está chegando deste microfone. Confira se escolheu o aparelho certo em "Dispositivo de entrada" e se ele não está mutado no Windows.</p>}
+      {quiet && (
+        <p className="warn-box">
+          Seu microfone está muito baixo. O Nexo já está amplificando, mas para ficar melhor: no Windows, abra Configurações &gt; Sistema &gt; Som &gt;
+          seu microfone e suba o "Volume de entrada" (ou "Aumento do microfone" nas propriedades).
+        </p>
+      )}
+    </>
   );
 }
 
@@ -217,6 +241,7 @@ function VoiceSettings() {
       )}
 
       <h3>Processamento de voz</h3>
+      <Toggle label="Amplificar microfone baixo automaticamente" hint="Aumenta sozinho o volume de microfones fracos para todo mundo te ouvir." checked={s.autoBoost} onChange={(v) => updateSettings({ autoBoost: v })} />
       <Toggle label="Supressão de ruído" hint="Corta barulho de fundo como ventilador e teclado." checked={s.noiseSuppression} onChange={(v) => updateSettings({ noiseSuppression: v })} />
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
       <Toggle label="Controle automático de ganho" hint="Ajusta o volume do microfone sozinho." checked={s.autoGainControl} onChange={(v) => updateSettings({ autoGainControl: v })} />

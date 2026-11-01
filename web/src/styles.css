@@ -282,3 +282,5 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
   .settings-close small { display: none; }
   .field-row { grid-template-columns: 1fr; }
 }
+.meter-info { margin-top: -6px; }
+.warn-box { background: rgba(245, 184, 75, .1); border: 1px solid rgba(245, 184, 75, .4); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
