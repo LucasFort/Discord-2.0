@@ -1,0 +1,11 @@
+services:
+  # Servidor de mídia (SFU) que repassa voz, câmera e transmissão de tela.
+  # Modo --dev usa a chave "devkey" / segredo "secret". Não use assim em produção.
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"       # sinalização (WebSocket)
+      - "7881:7881"       # mídia via TCP
+      - "7882:7882/udp"   # mídia via UDP
+    restart: unless-stopped
