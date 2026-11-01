@@ -40,6 +40,18 @@ Em produção a API também entrega o site, então é um único serviço (veja o
 
 Limites do plano grátis do Render: o serviço dorme depois de 15 minutos sem uso (o primeiro acesso demora uns 50 segundos) e o banco SQLite é apagado a cada deploy ou reinício. Serve para testar; para guardar dados de verdade, use um disco pago no Render ou troque para PostgreSQL.
 
+## Publicar (link oficial)
+
+São três partes, cada uma num lugar:
+
+| Parte | Onde | Como |
+|---|---|---|
+| Site (`web/`) | **Vercel** | Projeto com *Root Directory* `web`. Variável `VITE_API_URL` = endereço público da API (ex.: `https://nexo-api.onrender.com`). Refaça o deploy depois de mudar a variável. |
+| API (`server/`) | **Render** (ou Railway) | A Vercel não mantém WebSocket aberto, então a API fica fora dela. No Render: *New > Blueprint* com este repositório (usa o `render.yaml`). |
+| Voz e tela | **LiveKit Cloud** | Crie um projeto em cloud.livekit.io e copie `LIVEKIT_URL` (`wss://...`), `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET` para as variáveis da API. |
+
+No plano grátis do Render o banco SQLite fica em disco temporário: contas e mensagens somem quando o serviço reinicia. Para guardar de vez, use um disco persistente (plano pago do Render ou volume no Railway) apontando `DB_PATH` para ele, ou troque para PostgreSQL.
+
 ## Estrutura
 
 ```

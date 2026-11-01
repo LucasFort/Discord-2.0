@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react';
-import { getToken, type Channel, type Guild, type Message, type User } from './api';
+import { gatewayUrl, getToken, type Channel, type Guild, type Message, type User } from './api';
 
 export type State = {
   ready: boolean;
@@ -133,8 +133,7 @@ export function useStore(onUnauthorized: () => void) {
     let retry = 0;
     let timer: ReturnType<typeof setTimeout>;
     const connect = () => {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/gateway?token=${encodeURIComponent(getToken() ?? '')}`);
+      const ws = new WebSocket(gatewayUrl(getToken() ?? ''));
       wsRef.current = ws;
       ws.onopen = () => (retry = 0);
       ws.onmessage = (e) => dispatch(JSON.parse(e.data));

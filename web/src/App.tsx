@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Track } from 'livekit-client';
-import { api, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { api, API_MISSING, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { useStore, type Gateway, type State } from './store';
 import { QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
@@ -42,6 +42,7 @@ function Auth({ onDone }: { onDone: () => void }) {
           Senha
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
         </label>
+        {API_MISSING && <p className="error">Servidor do app ainda não conectado: entrar e criar conta ficam indisponíveis por enquanto.</p>}
         {error && <p className="error">{error}</p>}
         <button className="primary">{mode === 'login' ? 'Entrar' : 'Continuar'}</button>
         <button type="button" className="link" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
