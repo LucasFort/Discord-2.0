@@ -8,9 +8,22 @@ import {
 } from './db.js';
 import { sendToGuild, sendToUser } from './gateway.js';
 
-const LIVEKIT_URL = process.env.LIVEKIT_URL ?? 'ws://localhost:7880';
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY ?? 'devkey';
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET ?? 'secret';
+// Valores colados em painéis de deploy costumam vir com espaço ou quebra de linha: limpamos tudo.
+const env = (k: string) => process.env[k]?.trim() || undefined;
+/** Aceita "wss://x", "https://x" ou só "x.livekit.cloud" e devolve sempre ws(s)://. */
+export function normalizeLivekitUrl(raw: string | undefined): string {
+  const url = (raw ?? 'ws://localhost:7880').replace(/\/+$/, '');
+  if (/^wss?:\/\//i.test(url)) return url;
+  if (/^https:\/\//i.test(url)) return url.replace(/^https/i, 'wss');
+  if (/^http:\/\//i.test(url)) return url.replace(/^http/i, 'ws');
+  return `wss://${url}`;
+}
+const LIVEKIT_URL = normalizeLivekitUrl(env('LIVEKIT_URL'));
+const LIVEKIT_API_KEY = env('LIVEKIT_API_KEY') ?? 'devkey';
+const LIVEKIT_API_SECRET = env('LIVEKIT_API_SECRET') ?? 'secret';
+const livekitConfigured = !!(env('LIVEKIT_URL') && env('LIVEKIT_API_KEY') && env('LIVEKIT_API_SECRET'));
+if (process.env.NODE_ENV === 'production' && !livekitConfigured)
+  console.warn('[voz] LIVEKIT_URL, LIVEKIT_API_KEY ou LIVEKIT_API_SECRET não configurados: a voz não vai funcionar.');
 
 const credentials = z.object({
   username: z.string().trim().min(2).max(32).regex(/^[a-zA-Z0-9_.]+$/, 'Use letras, números, _ ou .'),
@@ -43,6 +56,9 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'Usuário ou senha incorretos' });
     return { token: await signSession(row.id), user: getUser(row.id) };
   });
+
+  // Diagnóstico sem segredos: mostra se a voz está configurada e para onde o cliente vai conectar.
+  app.get('/api/voice-config', async () => ({ configured: livekitConfigured, url: LIVEKIT_URL }));
 
   // Tudo abaixo exige login
   app.register(async (api) => {
@@ -167,6 +183,8 @@ export function registerRoutes(app: FastifyInstance) {
       const { channelId } = req.params as { channelId: string };
       const ch = getChannel(channelId);
       if (!ch || ch.type !== 'voice' || !isMember(ch.guild_id, req.user.id)) return reply.code(403).send({ error: 'Sem acesso' });
+      if (process.env.NODE_ENV === 'production' && !livekitConfigured)
+        return reply.code(503).send({ error: 'Servidor de voz não configurado: preencha LIVEKIT_URL, LIVEKIT_API_KEY e LIVEKIT_API_SECRET no Render' });
       const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
         identity: req.user.id,
         name: req.user.display_name,
