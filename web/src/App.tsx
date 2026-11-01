@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Track } from 'livekit-client';
-import { api, API_MISSING, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
+import {
+  Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, X,
+} from 'lucide-react';
+import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
+import { useToasts } from './toast';
+import { ask, AskHost } from './ask';
+import { SettingsView } from './SettingsView';
+import { updateSettings, useSettings } from './settings';
 import { useStore, type Gateway, type State } from './store';
-import { QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
+import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
 
 export function App() {
   const [authed, setAuthed] = useState(!!getToken());
@@ -33,6 +42,7 @@ function Auth({ onDone }: { onDone: () => void }) {
   return (
     <div className="auth">
       <form onSubmit={submit} className="auth-card">
+        <div className="logo"><Radio size={28} /></div>
         <h1>{mode === 'login' ? `Bem-vindo de volta ao ${APP_NAME}` : 'Criar uma conta'}</h1>
         <label>
           Usuário
@@ -48,6 +58,7 @@ function Auth({ onDone }: { onDone: () => void }) {
         <button type="button" className="link" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
           {mode === 'login' ? 'Precisa de uma conta? Registre-se' : 'Já tem uma conta? Entrar'}
         </button>
+        <p className="auth-sub">Voz, vídeo e transmissão de tela com seus amigos.</p>
       </form>
     </div>
   );
@@ -55,11 +66,24 @@ function Auth({ onDone }: { onDone: () => void }) {
 
 // ---------------------------------------------------------------- Layout
 function Main({ onLogout }: { onLogout: () => void }) {
-  const { state, dispatch, gateway } = useStore(onLogout);
+  const { state, dispatch, gateway, failures } = useStore(onLogout);
   const voice = useVoice(gateway);
+
+  // Se a conexão em tempo real caiu e voltou, avisa de novo em qual canal de voz estamos.
+  useEffect(() => {
+    if (state.ready && voice.channelId) gateway.send({ op: 'voice_state', channel_id: voice.channelId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.connection]);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
+  const [sounds, setSounds] = useState(soundsEnabled);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const toggleSounds = () => {
+    setSoundsEnabled(!sounds);
+    setSounds(!sounds);
+    if (!sounds) playSound('join');
+  };
 
   const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
@@ -73,7 +97,20 @@ function Main({ onLogout }: { onLogout: () => void }) {
     }
   }, [state.ready]);
 
-  if (!state.ready || !state.user) return <div className="loading">Conectando…</div>;
+  if (!state.ready || !state.user)
+    return (
+      <div className="loading">
+        <div>
+          <p>{failures >= 3 ? 'Não foi possível conectar ao servidor. Tentando de novo…' : 'Conectando…'}</p>
+          {failures >= 3 && (
+            <>
+              <p className="muted">Se o site acabou de acordar, pode levar até 1 minuto.</p>
+              <button onClick={onLogout}>Sair e entrar de novo</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
 
   const openChannel = (c: Channel) => {
     if (c.type === 'voice') {
@@ -86,11 +123,11 @@ function Main({ onLogout }: { onLogout: () => void }) {
   };
 
   const createGuild = async () => {
-    const name = prompt('Nome do servidor');
+    const name = await ask('Nome do servidor', { okText: 'Criar' });
     if (name) setGuildId((await api<Guild>('POST', '/guilds', { name })).id);
   };
   const joinGuild = async () => {
-    const input = prompt('Cole o link ou o código do convite');
+    const input = await ask('Cole o link ou o código do convite', { okText: 'Entrar' });
     const code = input?.trim().split('/').pop();
     if (code) setGuildId((await api<Guild>('POST', `/invites/${code}`).catch((e) => (alert(e.message), null)))?.id ?? guildId);
   };
@@ -105,8 +142,9 @@ function Main({ onLogout }: { onLogout: () => void }) {
             {initials(g.name)}
           </button>
         ))}
-        <button className="guild add" title="Criar servidor" onClick={createGuild}>+</button>
-        <button className="guild add" title="Entrar com convite" onClick={joinGuild}>↵</button>
+        <div className="guild-sep" />
+        <button className="guild add" title="Criar servidor" onClick={createGuild}><Plus size={22} /></button>
+        <button className="guild add" title="Entrar com convite" onClick={joinGuild}><LogIn size={20} /></button>
       </nav>
 
       <aside className="sidebar">
@@ -117,6 +155,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             me={state.user}
             activeId={view === 'voice' ? voice.channelId : textChannel?.id}
             onOpen={openChannel}
+            voiceSpeaking={new Set(voice.users.filter((u) => u.speaking).map((u) => u.identity))}
           />
         ) : (
           <div className="empty">Crie um servidor ou entre com um convite.</div>
@@ -128,15 +167,23 @@ function Main({ onLogout }: { onLogout: () => void }) {
             <strong>{state.user.display_name}</strong>
             <small>@{state.user.username}</small>
           </div>
-          <button className={`icon ${voice.muted ? 'danger' : ''}`} title="Silenciar" onClick={voice.toggleMute}>🎙</button>
-          <button className={`icon ${voice.deafened ? 'danger' : ''}`} title="Ensurdecer" onClick={voice.toggleDeafen}>🎧</button>
-          <button className="icon" title="Sair" onClick={onLogout}>⎋</button>
+          <button className={`icon ${voice.muted ? 'danger' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+            {voice.muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          <button className={`icon ${voice.deafened ? 'danger' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+            {voice.deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+          </button>
+          <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
+            {sounds ? <Bell size={18} /> : <BellOff size={18} />}
+          </button>
+          <button className="icon" title="Configurações" onClick={() => setSettingsOpen(true)}><SettingsIcon size={18} /></button>
+          <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
         </div>
       </aside>
 
       <main className="content">
         {view === 'voice' && voice.channelId ? (
-          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} />
+          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onSettings={() => setSettingsOpen(true)} />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
         ) : (
@@ -145,42 +192,52 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </main>
 
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
+      <Toasts />
+      <AskHost />
+      {settingsOpen && <SettingsView onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------- Canais
-function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: string | null; onOpen: (c: Channel) => void }) {
-  const { guild, state, me, activeId, onOpen } = props;
+function ChannelList(props: {
+  guild: Guild;
+  state: State;
+  me: User;
+  activeId?: string | null;
+  onOpen: (c: Channel) => void;
+  voiceSpeaking?: Set<string>;
+}) {
+  const { guild, state, me, activeId, onOpen, voiceSpeaking } = props;
   const isOwner = guild.owner_id === me.id;
   const add = async (type: 'text' | 'voice') => {
-    const name = prompt(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz');
+    const name = await ask(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz', { okText: 'Criar' });
     if (name) await api('POST', `/guilds/${guild.id}/channels`, { name, type }).catch((e) => alert(e.message));
   };
   const invite = async () => {
     const { code } = await api<{ code: string }>('POST', `/guilds/${guild.id}/invites`, {});
     const link = `${location.origin}/convite/${code}`;
     await navigator.clipboard?.writeText(link).catch(() => {});
-    prompt('Convite copiado (válido por 7 dias):', link);
+    await ask('Convite copiado (válido por 7 dias)', { value: link, readOnly: true });
   };
   const section = (type: 'text' | 'voice', title: string) => (
     <>
       <div className="section">
         <span>{title}</span>
-        {isOwner && <button className="icon small" title="Criar canal" onClick={() => add(type)}>+</button>}
+        {isOwner && <button className="icon small" title="Criar canal" onClick={() => add(type)}><Plus size={16} /></button>}
       </div>
       {guild.channels
         .filter((c) => c.type === type)
         .map((c) => (
           <div key={c.id}>
             <button className={`channel ${c.id === activeId ? 'active' : ''}`} onClick={() => onOpen(c)}>
-              <span className="hash">{type === 'text' ? '#' : '🔊'}</span> {c.name}
+              <span className="hash">{type === 'text' ? <Hash size={18} /> : <Volume2 size={18} />}</span> <span className="channel-name">{c.name}</span>
             </button>
             {type === 'voice' &&
               guild.members
                 .filter((m) => state.voice[m.id] === c.id)
                 .map((m) => (
-                  <div key={m.id} className="voice-member">
+                  <div key={m.id} className={`voice-member ${voiceSpeaking?.has(m.id) ? 'speaking' : ''}`}>
                     <Avatar user={m} size={20} /> {m.display_name}
                   </div>
                 ))}
@@ -192,7 +249,7 @@ function ChannelList(props: { guild: Guild; state: State; me: User; activeId?: s
     <div className="channels">
       <header className="guild-header">
         <span>{guild.name}</span>
-        <button className="icon small" title="Convidar pessoas" onClick={invite}>👤+</button>
+        <button className="icon small" title="Convidar pessoas" onClick={invite}><UserPlus size={18} /></button>
       </header>
       {section('text', 'Canais de texto')}
       {section('voice', 'Canais de voz')}
@@ -279,13 +336,13 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
   return (
     <div className="chat">
-      <header className="topbar"><span className="hash">#</span> {channel.name}</header>
+      <header className="topbar"><span className="hash"><Hash size={20} /></span> {channel.name}</header>
       <div className="messages" ref={listRef} onScroll={onScroll}>
         {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
         {messages?.map((m, i) => {
           const prev = messages[i - 1];
           const grouped = prev && prev.author.id === m.author.id && m.created_at - prev.created_at < 5 * 60_000;
-          return <MessageRow key={m.id} msg={m} grouped={!!grouped} mine={m.author.id === state.user?.id} />;
+          return <MessageRow key={m.id} msg={m} grouped={!!grouped} mine={m.author.id === state.user?.id} me={state.user!.id} members={state.guilds.find((g) => g.id === channel.guild_id)?.members ?? []} />;
         })}
       </div>
       <form className="composer" onSubmit={send}>
@@ -296,10 +353,18 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
   );
 }
 
-function MessageRow({ msg, grouped, mine }: { msg: Message; grouped: boolean; mine: boolean }) {
+function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped: boolean; mine: boolean; me: string; members: User[] }) {
   const time = new Date(msg.created_at);
+  const [picker, setPicker] = useState(false);
+  const react = async (emoji: string) => {
+    setPicker(false);
+    const on = !msg.reactions?.find((r) => r.emoji === emoji)?.user_ids.includes(me);
+    if (on) playSound('reaction');
+    await api('PUT', `/messages/${msg.id}/reactions/${encodeURIComponent(emoji)}`, { on }).catch((e) => alert(e.message));
+  };
+  const names = (ids: string[]) => ids.map((id) => members.find((m) => m.id === id)?.display_name ?? '?').join(', ');
   const edit = async () => {
-    const content = prompt('Editar mensagem', msg.content);
+    const content = await ask('Editar mensagem', { value: msg.content, okText: 'Salvar' });
     if (content && content !== msg.content) await api('PATCH', `/messages/${msg.id}`, { content });
   };
   const remove = async () => {
@@ -319,10 +384,32 @@ function MessageRow({ msg, grouped, mine }: { msg: Message; grouped: boolean; mi
           <Markdown text={msg.content} />
           {msg.edited_at && <small className="edited"> (editado)</small>}
         </div>
+        {!!msg.reactions?.length && (
+          <div className="reactions">
+            {msg.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                className={`reaction ${r.user_ids.includes(me) ? 'mine' : ''}`}
+                title={`Reagiram com ${r.emoji}: ${names(r.user_ids)}`}
+                onClick={() => react(r.emoji)}
+              >
+                <span className="reaction-emoji">{r.emoji}</span> {r.user_ids.length}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+      {picker && (
+        <div className="emoji-picker" onMouseLeave={() => setPicker(false)}>
+          {REACTIONS.map((e) => (
+            <button key={e} onClick={() => react(e)}>{e}</button>
+          ))}
+        </div>
+      )}
       <div className="message-actions">
-        {mine && <button className="icon small" title="Editar" onClick={edit}>✎</button>}
-        <button className="icon small" title="Apagar" onClick={remove}>🗑</button>
+        <button className="icon small" title="Reagir" onClick={() => setPicker((p) => !p)}><SmilePlus size={16} /></button>
+        {mine && <button className="icon small" title="Editar" onClick={edit}><Pencil size={16} /></button>}
+        <button className="icon small" title="Apagar" onClick={remove}><Trash2 size={16} /></button>
       </div>
     </div>
   );
@@ -354,28 +441,39 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   return (
     <div className="voicebar">
       <button className="link voicebar-info" onClick={onOpen}>
-        <strong className="ok">{voice.connecting ? 'Conectando…' : 'Voz conectada'}</strong>
+        <strong className={voice.reconnecting || voice.connecting ? 'warn' : 'ok'}>
+          <Radio size={14} /> {voice.connecting ? 'Conectando…' : voice.reconnecting ? 'Reconectando…' : 'Voz conectada'}
+        </strong>
         <small>{channelName}</small>
       </button>
-      <button className="icon danger" title="Desconectar" onClick={voice.leave}>✕</button>
+      {voice.sharing && <span className="live small">AO VIVO</span>}
+      <button className="icon danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={18} /></button>
     </div>
   );
 }
 
-function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }) {
+function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelName: string; onSettings: () => void }) {
+  const settings = useSettings();
   const [shareOpen, setShareOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [stageStats, setStageStats] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
   const streams = voice.users.filter((u) => u.isSharing);
   const focused = streams.find((u) => u.identity === focus && u.screen);
 
   return (
     <div className="voice-view">
-      <header className="topbar">🔊 {channelName}</header>
+      <header className="topbar">
+        <span className="hash"><Volume2 size={20} /></span> {channelName}
+        {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
+      </header>
       {focused ? (
         <div className="stage">
           <VideoTrack track={focused.screen!} contain />
+          {stageStats && <StreamStats track={focused.screen!} />}
           <div className="stage-bar">
             <span className="live">AO VIVO</span> {focused.name}
+            <button className="link" onClick={() => setStageStats((v) => !v)}>{stageStats ? 'Esconder estatísticas' : 'Estatísticas'}</button>
             <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
           </div>
         </div>
@@ -388,24 +486,64 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
             <div key={u.identity} className={`tile ${u.speaking ? 'speaking' : ''}`}>
               {u.camera ? <VideoTrack track={u.camera} mirror={u.isLocal} /> : <div className="tile-avatar">{initials(u.name)}</div>}
               <div className="tile-name">
-                {u.micMuted && '🔇 '}
+                {u.micMuted && <MicOff size={14} className="muted-icon" />}
                 {u.name}
                 {u.isSharing && <span className="live">AO VIVO</span>}
               </div>
+              {!u.isLocal && (
+                <label className="tile-volume" title={`Volume de ${u.name}`}>
+                  <Volume2 size={14} />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={settings.userVolumes[u.identity] ?? 100}
+                    onChange={(e) => updateSettings({ userVolumes: { ...settings.userVolumes, [u.identity]: +e.target.value } })}
+                  />
+                  <small>{settings.userVolumes[u.identity] ?? 100}%</small>
+                </label>
+              )}
             </div>
           ))}
         </div>
       )}
+      <div className="floating-layer" aria-hidden>
+        {voice.floating.map((f) => (
+          <div key={f.id} className="floating" style={{ left: `${f.left}%` }}>
+            <span>{f.emoji}</span>
+            {f.name && <small>{f.name}</small>}
+          </div>
+        ))}
+      </div>
       <div className="controls">
-        <button className={voice.muted ? 'danger' : ''} onClick={voice.toggleMute}>{voice.muted ? 'Ativar microfone' : 'Silenciar'}</button>
-        <button className={voice.deafened ? 'danger' : ''} onClick={voice.toggleDeafen}>{voice.deafened ? 'Ouvir' : 'Ensurdecer'}</button>
-        <button onClick={voice.toggleCamera}>{voice.camera ? 'Desligar câmera' : 'Câmera'}</button>
+        <div className="call-reactions">
+          <button className={`round ${emojiOpen ? 'on' : ''}`} title="Reagir na call" onClick={() => setEmojiOpen((o) => !o)}>
+            <SmilePlus size={22} />
+          </button>
+          {emojiOpen && (
+            <div className="emoji-picker up">
+              {CALL_EMOJIS.map((e) => (
+                <button key={e} onClick={() => voice.sendReaction(e)}>{e}</button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button className={`round ${voice.muted ? 'off' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+          {voice.muted ? <MicOff size={22} /> : <Mic size={22} />}
+        </button>
+        <button className={`round ${voice.deafened ? 'off' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+          {voice.deafened ? <HeadphoneOff size={22} /> : <Headphones size={22} />}
+        </button>
+        <button className={`round ${voice.camera ? 'on' : ''}`} title={voice.camera ? 'Desligar câmera' : 'Ligar câmera'} onClick={voice.toggleCamera}>
+          {voice.camera ? <Video size={22} /> : <VideoOff size={22} />}
+        </button>
         {voice.sharing ? (
-          <button className="danger" onClick={voice.stopShare}>Parar transmissão</button>
+          <button className="round on" title="Parar transmissão" onClick={voice.stopShare}><MonitorX size={22} /></button>
         ) : (
-          <button className="primary" onClick={() => setShareOpen(true)}>Transmitir tela</button>
+          <button className="round accent" title="Transmitir tela" onClick={() => setShareOpen(true)}><MonitorUp size={22} /></button>
         )}
-        <button className="danger" onClick={voice.leave}>Desconectar</button>
+        <button className="round" title="Configurações de voz" onClick={onSettings}><SettingsIcon size={22} /></button>
+        <button className="round danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={22} /></button>
       </div>
       {shareOpen && (
         <ShareDialog
@@ -421,6 +559,7 @@ function VoiceView({ voice, channelName }: { voice: Voice; channelName: string }
 }
 
 function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; onFocus: () => void }) {
+  const [stats, setStats] = useState(false);
   if (!user.watching || !user.screen) {
     return (
       <div className="tile stream">
@@ -435,12 +574,14 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
   return (
     <div className="tile stream" onDoubleClick={onFocus}>
       <VideoTrack track={user.screen} contain />
+      {stats && <StreamStats track={user.screen} />}
       <div className="tile-name">
         <span className="live">AO VIVO</span> {user.isLocal ? 'Sua transmissão' : user.name}
         <span className="tile-actions">
-          <button className="icon small" title="Ampliar" onClick={onFocus}>⤢</button>
-          <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}>⛶</button>
-          {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}>✕</button>}
+          <button className={`icon small ${stats ? 'active' : ''}`} title="Estatísticas da transmissão" onClick={() => setStats((v) => !v)}><Activity size={16} /></button>
+          <button className="icon small" title="Ampliar" onClick={onFocus}><Expand size={16} /></button>
+          <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
+          {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
         </span>
       </div>
     </div>
@@ -466,8 +607,8 @@ function ShareDialog({ onClose, onStart }: { onClose: () => void; onStart: (o: S
         </div>
         <h3>Otimizar para</h3>
         <div className="options">
-          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Texto nítido</button>
-          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido</button>
+          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Equilibrado (recomendado)</button>
+          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido (jogos)</button>
         </div>
         <label className="check">
           <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} /> Transmitir o áudio também
@@ -489,6 +630,80 @@ function VideoTrack({ track, contain, mirror }: { track: Track; contain?: boolea
     return () => void track.detach(el);
   }, [track]);
   return <video ref={ref} className={`${contain ? 'contain' : ''} ${mirror ? 'mirror' : ''}`} autoPlay playsInline muted />;
+}
+
+function Toasts() {
+  const list = useToasts();
+  return (
+    <div className="toasts">
+      {list.map((t) => (
+        <div key={t.id} className={`toast ${t.kind ?? ''}`}>{t.text}</div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Números da transmissão em tempo real, para saber por que está travando:
+ * quem transmite vê o que o navegador está mandando e o motivo de limitar (CPU ou internet);
+ * quem assiste vê o que está chegando, a perda de pacotes e os quadros perdidos.
+ */
+function StreamStats({ track }: { track: Track }) {
+  const [lines, setLines] = useState<{ text: string; warn?: string }>({ text: 'medindo…' });
+  useEffect(() => {
+    let prev: { t: number; frames: number; lost: number; recv: number; dropped: number; bytes: number } | null = null;
+    let prevSent: { t: number; bytes: number } | null = null;
+    const mbps = (bytes: number, ms: number) => {
+      const bps = (bytes * 8) / (ms / 1000);
+      return bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} Mbps` : `${Math.round(bps / 1000)} kbps`;
+    };
+    const tick = async () => {
+      if (track instanceof LocalVideoTrack) {
+        const s = (await track.getSenderStats())[0];
+        if (!s) return;
+        const reason = s.qualityLimitationReason;
+        const rate = prevSent && s.timestamp > prevSent.t ? mbps((s.bytesSent ?? 0) - prevSent.bytes, s.timestamp - prevSent.t) : '…';
+        prevSent = { t: s.timestamp, bytes: s.bytesSent ?? 0 };
+        setLines({
+          text: `Enviando ${s.frameWidth}×${s.frameHeight} · ${Math.round(s.framesPerSecond ?? 0)} fps · ${rate}`,
+          warn:
+            reason === 'cpu' ? 'Limitado pela CPU: feche jogos/abas pesadas ou use 720p'
+            : reason === 'bandwidth' && (s.framesPerSecond ?? 0) < 24 ? 'Limitado pela internet de upload: tente 720p ou 1080p 30 fps'
+            : reason === 'bandwidth' ? 'Resolução reduzida para caber na internet de upload'
+            : undefined,
+        });
+      } else if (track instanceof RemoteVideoTrack) {
+        const s = await track.getReceiverStats();
+        if (!s) return;
+        const now = s.timestamp;
+        const cur = { t: now, frames: s.framesDecoded ?? 0, lost: s.packetsLost ?? 0, recv: s.packetsReceived ?? 0, dropped: s.framesDropped ?? 0, bytes: s.bytesReceived ?? 0 };
+        if (prev && now > prev.t) {
+          const dt = (now - prev.t) / 1000;
+          const fps = Math.round((cur.frames - prev.frames) / dt);
+          const lost = cur.lost - prev.lost;
+          const total = lost + (cur.recv - prev.recv);
+          const lossPct = total > 0 ? (100 * lost) / total : 0;
+          setLines({
+            text: `Recebendo ${s.frameWidth ?? '?'}×${s.frameHeight ?? '?'} · ${fps} fps · ${mbps(cur.bytes - prev.bytes, now - prev.t)} · perda ${lossPct.toFixed(1)}%`,
+            warn:
+              lossPct > 3 ? 'Muita perda de pacotes: a internet de alguém está instável (Wi-Fi?)'
+              : cur.dropped - prev.dropped > 5 ? 'Seu PC está descartando quadros ao decodificar'
+              : undefined,
+          });
+        }
+        prev = cur;
+      }
+    };
+    const id = setInterval(() => void tick().catch(() => {}), 1000);
+    void tick().catch(() => {});
+    return () => clearInterval(id);
+  }, [track]);
+  return (
+    <div className="stream-stats">
+      <div>{lines.text}</div>
+      {lines.warn && <div className="warn">{lines.warn}</div>}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- Utilitários

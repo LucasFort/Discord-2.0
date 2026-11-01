@@ -1,8 +1,10 @@
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
+import { playSound } from './sounds';
 import { gatewayUrl, getToken, type Channel, type Guild, type Message, type User } from './api';
 
 export type State = {
   ready: boolean;
+  connection: number; // muda a cada READY (reconexão)
   user: User | null;
   guilds: Guild[];
   online: Record<string, true>;
@@ -13,8 +15,8 @@ export type State = {
 
 type Action =
   | { t: 'READY'; d: { user: User; guilds: Guild[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
-  | { t: 'GUILD_CREATE'; d: Guild }
-  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User } }
+  | { t: 'GUILD_CREATE'; d: Guild & { online?: string[] } }
+  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; online?: boolean } }
   | { t: 'CHANNEL_CREATE'; d: Channel }
   | { t: 'MESSAGE_CREATE' | 'MESSAGE_UPDATE'; d: Message }
   | { t: 'MESSAGE_DELETE'; d: { id: string; channel_id: string } }
@@ -26,7 +28,7 @@ type Action =
 
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null };
 
-const initial: State = { ready: false, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
+const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -40,18 +42,26 @@ function reducer(s: State, a: Action): State {
       return {
         ...initial,
         ready: true,
+        connection: s.connection + 1,
         user: a.d.user,
         guilds: a.d.guilds,
-        online: Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])),
+        online: { ...Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])), [a.d.user.id]: true },
         voice,
         messages: s.messages,
       };
     }
-    case 'GUILD_CREATE':
-      return { ...s, guilds: [...s.guilds.filter((g) => g.id !== a.d.id), a.d] };
+    case 'GUILD_CREATE': {
+      const { online: ids = [], ...guild } = a.d;
+      return {
+        ...s,
+        guilds: [...s.guilds.filter((g) => g.id !== guild.id), guild],
+        online: { ...s.online, ...Object.fromEntries(ids.map((id) => [id, true as const])) },
+      };
+    }
     case 'GUILD_MEMBER_ADD':
       return {
         ...s,
+        online: a.d.online ? { ...s.online, [a.d.user.id]: true } : s.online,
         guilds: s.guilds.map((g) =>
           g.id === a.d.guild_id && !g.members.some((m) => m.id === a.d.user.id) ? { ...g, members: [...g.members, a.d.user] } : g,
         ),
@@ -118,6 +128,9 @@ function reducer(s: State, a: Action): State {
       }
       return changed ? { ...s, typing } : s;
     }
+    default:
+      // Evento que esta versão do site não conhece (ex.: PONG): ignora em vez de apagar o estado.
+      return s;
   }
 }
 
@@ -127,6 +140,8 @@ export type Gateway = { send: (msg: object) => void };
 export function useStore(onUnauthorized: () => void) {
   const [state, dispatch] = useReducer(reducer, initial);
   const wsRef = useRef<WebSocket | null>(null);
+  const meRef = useRef<string | null>(null);
+  const [failures, setFailures] = useState(0); // tentativas seguidas sem conseguir conectar
 
   useEffect(() => {
     let closed = false;
@@ -135,16 +150,39 @@ export function useStore(onUnauthorized: () => void) {
     const connect = () => {
       const ws = new WebSocket(gatewayUrl(getToken() ?? ''));
       wsRef.current = ws;
-      ws.onopen = () => (retry = 0);
-      ws.onmessage = (e) => dispatch(JSON.parse(e.data));
+      ws.onmessage = (e) => {
+        retry = 0;
+        setFailures(0);
+        try {
+          const msg = JSON.parse(e.data);
+          if (!msg?.t || msg.t === 'PONG') return;
+          if (msg.t === 'READY') meRef.current = msg.d.user.id;
+          // Mensagem nova de outra pessoa com a aba em segundo plano: toca um aviso curto.
+          if (msg.t === 'MESSAGE_CREATE' && document.hidden && msg.d.author?.id !== meRef.current) playSound('message');
+          dispatch(msg);
+        } catch {
+          /* mensagem inválida: ignora */
+        }
+      };
       ws.onclose = (e) => {
         if (closed) return;
         if (e.code === 4001) return onUnauthorized();
+        setFailures((f) => f + 1);
+        // Proxies (como o do Render) podem trocar o código 4001 por 1006. Confirmamos o login por HTTP:
+        // se a conta não existe mais (ex.: banco recriado), volta para a tela de login em vez de tentar para sempre.
+        fetch('/api/me', { headers: { authorization: `Bearer ${getToken() ?? ''}` } })
+          .then((r) => {
+            if (r.status === 401 && !closed) {
+              closed = true;
+              onUnauthorized();
+            }
+          })
+          .catch(() => {});
         timer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000));
       };
     };
     connect();
-    const ping = setInterval(() => wsRef.current?.readyState === 1 && wsRef.current.send('{"op":"ping"}'), 30000);
+    const ping = setInterval(() => wsRef.current?.readyState === 1 && wsRef.current.send('{"op":"ping"}'), 20000);
     const sweep = setInterval(() => dispatch({ t: 'TYPING_SWEEP' }), 2000);
     return () => {
       closed = true;
@@ -158,5 +196,5 @@ export function useStore(onUnauthorized: () => void) {
   const gateway: Gateway = {
     send: (msg) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(msg)),
   };
-  return { state, dispatch, gateway };
+  return { state, dispatch, gateway, failures };
 }

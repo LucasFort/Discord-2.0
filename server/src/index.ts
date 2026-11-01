@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
+import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +9,18 @@ import { ZodError } from 'zod';
 import { registerGateway } from './gateway.js';
 import { registerRoutes } from './routes.js';
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+// trustProxy: no Render o IP real do usuário vem no cabeçalho X-Forwarded-For (usado pelo limite de tentativas).
+const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, trustProxy: true });
 
 await app.register(cors, { origin: true });
 await app.register(websocket);
+// Limites só nas rotas que pedem (login, cadastro, envio de mensagem).
+await app.register(rateLimit, {
+  global: false,
+  // Devolve um Error para o setErrorHandler montar a resposta { error } como nas outras rotas.
+  errorResponseBuilder: (_req, ctx) =>
+    Object.assign(new Error(`Muitas tentativas. Espere ${Math.ceil(ctx.ttl / 1000)} segundos e tente de novo.`), { statusCode: 429 }),
+});
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof ZodError) return reply.code(400).send({ error: err.issues.map((i) => i.message).join('; ') });
