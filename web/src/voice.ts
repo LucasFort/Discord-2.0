@@ -45,6 +45,9 @@ export function useVoice(gateway: Gateway) {
   const audioBox = useRef<HTMLDivElement | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const leavingRef = useRef(false); // true quando a pessoa clicou em sair (não reconectar)
+  const rejoinTries = useRef(0);
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const deafRef = useRef(false);
@@ -63,22 +66,30 @@ export function useVoice(gateway: Gateway) {
   };
 
   const leave = useCallback(async () => {
+    leavingRef.current = true;
     const room = roomRef.current;
     roomRef.current = null;
     await room?.disconnect();
     if (audioBox.current) audioBox.current.innerHTML = '';
     setChannelId(null);
     setWatching({});
+    setReconnecting(false);
     gateway.send({ op: 'voice_state', channel_id: null });
   }, [gateway]);
 
   const join = useCallback(
     async (id: string) => {
       if (roomRef.current) await leave();
+      leavingRef.current = false;
       setConnecting(true);
       try {
         const { url, token } = await api<{ url: string; token: string }>('POST', `/channels/${id}/voice-token`);
-        const room = new Room({ adaptiveStream: true, dynacast: true });
+        const room = new Room({
+          adaptiveStream: true,
+          dynacast: true,
+          // Voz: Opus com DTX (não manda nada no silêncio) e RED (redundância contra perda de pacotes).
+          publishDefaults: { dtx: true, red: true },
+        });
         roomRef.current = room;
 
         room
@@ -108,8 +119,19 @@ export function useVoice(gateway: Gateway) {
           .on(RoomEvent.ActiveSpeakersChanged, rerender)
           .on(RoomEvent.LocalTrackPublished, rerender)
           .on(RoomEvent.LocalTrackUnpublished, rerender)
+          .on(RoomEvent.Reconnecting, () => setReconnecting(true))
+          .on(RoomEvent.Reconnected, () => setReconnecting(false))
           .on(RoomEvent.Disconnected, () => {
-            if (roomRef.current === room) leave();
+            if (roomRef.current !== room) return;
+            // Queda que o próprio LiveKit não conseguiu recuperar: entra de novo sozinho (até 3 vezes seguidas).
+            if (!leavingRef.current && rejoinTries.current < 3) {
+              rejoinTries.current++;
+              roomRef.current = null;
+              setReconnecting(true);
+              setTimeout(() => join(id), 1000 * rejoinTries.current);
+              return;
+            }
+            leave();
           });
 
         try {
@@ -131,6 +153,8 @@ export function useVoice(gateway: Gateway) {
         }
         await room.startAudio().catch(() => {});
         setChannelId(id);
+        setReconnecting(false);
+        rejoinTries.current = 0;
         gateway.send({ op: 'voice_state', channel_id: id });
       } catch (e) {
         await roomRef.current?.disconnect();
@@ -184,9 +208,14 @@ export function useVoice(gateway: Gateway) {
         surfaceSwitching: 'include',
       },
       {
-        videoCodec: 'vp9',
-        backupCodec: true,
-        screenShareEncoding: { maxBitrate: q.bitrate, maxFramerate: q.fps },
+        // H.264 tem codificação por hardware na maioria dos PCs; VP9 em software travava o fps e a voz.
+        videoCodec: 'h264',
+        backupCodec: false,
+        // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
+        simulcast: false,
+        screenShareEncoding: { maxBitrate: q.bitrate, maxFramerate: q.fps, priority: 'high' },
+        // Texto: segura a resolução e sacrifica fps. Jogo/vídeo: segura o fps e reduz a resolução.
+        degradationPreference: opts.optimizeFor === 'detail' ? 'maintain-resolution' : 'maintain-framerate',
       },
     );
     rerender();
@@ -231,6 +260,7 @@ export function useVoice(gateway: Gateway) {
   return {
     channelId,
     connecting,
+    reconnecting,
     users,
     muted,
     deafened,

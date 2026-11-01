@@ -46,6 +46,8 @@ export function registerGateway(app: FastifyInstance) {
     // o que depende do banco espera o login terminar.
     let user: User | undefined;
     let closed = false;
+    // Ping do servidor a cada 25 s: proxies (como o do Render) derrubam conexões que ficam quietas.
+    const heartbeat = setInterval(() => ws.readyState === 1 && ws.ping(), 25_000);
     const ready = (async () => {
       user = await userFromToken((req.query as { token?: string }).token);
       if (closed) return;
@@ -102,6 +104,7 @@ export function registerGateway(app: FastifyInstance) {
 
     ws.on('close', async () => {
       closed = true;
+      clearInterval(heartbeat);
       await ready;
       const u = user;
       const set = u && sockets.get(u.id);
