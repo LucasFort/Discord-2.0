@@ -9,6 +9,7 @@ import {
   type RemoteTrack,
   RemoteAudioTrack,
   type LocalAudioTrack,
+  type AudioCaptureOptions,
 } from 'livekit-client';
 import { MicProcessor, newAudioContext } from './mic';
 import { getSettings, micConstraints, onSettings, type Settings } from './settings';
@@ -26,8 +27,17 @@ let floatId = 1;
 export let activeMic: MicProcessor | null = null;
 let micCtx: AudioContext | null = null;
 
+/** Passa para o processador do microfone os áudios que tocam na call (para reconhecer o eco). */
+function feedRemoteAudio(room: Room) {
+  const tracks: MediaStreamTrack[] = [];
+  room.remoteParticipants.forEach((p) =>
+    p.audioTrackPublications.forEach((pub) => pub.track?.mediaStreamTrack && tracks.push(pub.track.mediaStreamTrack)),
+  );
+  activeMic?.setRemoteTracks(tracks);
+}
+
 /** O microfone só passa pelo processamento quando alguma opção precisa dele. */
-const needsMicProcessor = (s: Settings) => s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
+const needsMicProcessor = (s: Settings) => s.echoGate || s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
 
 /**
  * Volume final de cada áudio: volume geral × volume da pessoa (voz) ou da transmissão dela
@@ -151,12 +161,14 @@ export function useVoice(gateway: Gateway) {
             }
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
+              feedRemoteAudio(room);
               (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, deafRef.current));
             }
             rerender();
           })
           .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
             track.detach().forEach((el) => el.remove());
+            feedRemoteAudio(room);
             rerender();
           })
           .on(RoomEvent.TrackUnpublished, (pub, p) => {
@@ -262,6 +274,7 @@ export function useVoice(gateway: Gateway) {
       const proc = new MicProcessor();
       await track.setProcessor(proc);
       activeMic = proc;
+      feedRemoteAudio(room);
     } catch (e) {
       console.warn('Processamento do microfone indisponível, usando o microfone direto', e);
       activeMic = null;
@@ -348,7 +361,11 @@ export function useVoice(gateway: Gateway) {
     await lp.setScreenShareEnabled(
       true,
       {
-        audio: opts.audio,
+        // Áudio da transmissão: sem os filtros de voz (estragam música e jogo) e, onde o navegador
+        // deixa, sem o som do próprio Nexo. Senão quem assiste ouve a própria voz de volta (eco).
+        audio: opts.audio
+          ? ({ echoCancellation: false, noiseSuppression: false, autoGainControl: false, restrictOwnAudio: true, suppressLocalAudioPlayback: false } as AudioCaptureOptions)
+          : false,
         systemAudio: opts.audio ? 'include' : 'exclude',
         // Nativa: sem limite de tamanho (largura 0 = sem teto), só o fps.
         resolution: { width: q.width ?? 0, height: q.height ?? 0, frameRate: q.fps },

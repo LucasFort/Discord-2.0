@@ -139,6 +139,43 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
   }
   private wantStrong = false;
 
+  // ---------- Eco ----------
+  /** Nível (dB) do som que está saindo das caixas agora: vozes e transmissões dos outros. */
+  remoteLevel = -100;
+  private remote = new Map<MediaStreamTrack, { src: MediaStreamAudioSourceNode; an: AnalyserNode }>();
+  private remoteUntil = 0;
+  private remoteBuf = new Float32Array(512);
+
+  /** Áudios que estão tocando na call. O eco do microfone só pode vir deles. */
+  setRemoteTracks(tracks: MediaStreamTrack[]) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    for (const [t, n] of this.remote) {
+      if (!tracks.includes(t)) {
+        n.src.disconnect();
+        this.remote.delete(t);
+      }
+    }
+    for (const t of tracks) {
+      if (this.remote.has(t) || t.readyState !== 'live') continue;
+      try {
+        const src = ctx.createMediaStreamSource(new MediaStream([t]));
+        const an = ctx.createAnalyser();
+        an.fftSize = 512;
+        src.connect(an); // só mede, não toca de novo
+        this.remote.set(t, { src, an });
+      } catch {
+        /* faixa que não dá para medir */
+      }
+    }
+  }
+
+  private measureRemote() {
+    let max = -100;
+    for (const { an } of this.remote.values()) max = Math.max(max, this.measure(an, this.remoteBuf));
+    return max;
+  }
+
   private measure(a: AnalyserNode, buf: Float32Array<ArrayBuffer>) {
     a.getFloatTimeDomainData(buf);
     let sum = 0;
@@ -156,9 +193,18 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     // Nível cru (depois do volume de entrada, antes da amplificação automática).
     const raw = this.measure(this.rawAnalyser!, buf);
     this.rawLevel = raw;
-    // Ruído de fundo: desce rápido até o mínimo e sobe devagar.
-    this.noiseFloor = raw < this.noiseFloor ? raw : Math.min(this.noiseFloor + 0.02, -20);
-    const speaking = raw > this.noiseFloor + 9 && raw > -95;
+
+    // Alguém falando (ou transmissão tocando) nas caixas: o que entra no microfone pode ser eco.
+    // Segura 350 ms depois que para, que é o tempo do eco do ambiente sumir.
+    this.remoteLevel = this.measureRemote();
+    if (this.remoteLevel > -55) this.remoteUntil = now + 350;
+    const echoRisk = s.echoGate && now < this.remoteUntil;
+
+    // Ruído de fundo: desce rápido até o mínimo e sobe devagar (não sobe com eco, senão aprende o eco).
+    this.noiseFloor = raw < this.noiseFloor ? raw : echoRisk ? this.noiseFloor : Math.min(this.noiseFloor + 0.02, -20);
+    // Com risco de eco a voz precisa chegar perto do volume normal da sua fala; o eco que sobra
+    // depois do cancelamento é bem mais baixo e fica de fora. Falar por cima dos outros continua passando.
+    const speaking = raw > this.noiseFloor + 9 && raw > -95 && (!echoRisk || raw > this.speechLevel - 9);
     if (speaking) {
       this.lastSpeech = now;
       this.speechLevel += (raw - this.speechLevel) * 0.03;
@@ -167,9 +213,10 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
       this.speechPeak = Math.max(-100, this.speechPeak - 0.2);
     }
 
-    // Amplificação automática: leva a fala para perto de -24 dB, no máximo +36 dB.
-    const wantBoost = s.autoBoost ? Math.max(0, Math.min(36, -24 - this.speechLevel)) : 0;
-    this.boostDb += Math.max(-0.5, Math.min(0.5, wantBoost - this.boostDb));
+    // Amplificação automática: leva a fala para perto de -24 dB, no máximo +30 dB.
+    // Não mexe enquanto os outros falam, para não aumentar o eco junto.
+    const wantBoost = s.autoBoost ? Math.max(0, Math.min(30, -24 - this.speechLevel)) : 0;
+    if (!echoRisk) this.boostDb += Math.max(-0.5, Math.min(0.5, wantBoost - this.boostDb));
     this.boost!.gain.setTargetAtTime(10 ** (this.boostDb / 20), ctx.currentTime, 0.05);
 
     this.level = this.measure(this.analyser!, buf);
@@ -201,6 +248,8 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
 
   async destroy() {
     clearInterval(this.timer);
+    this.remote.forEach((n) => n.src.disconnect());
+    this.remote.clear();
     (this.denoise as RnnoiseWorkletNode | null)?.destroy?.();
     this.denoise = null;
     this.pre = this.post = undefined;
