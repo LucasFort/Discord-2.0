@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, MonitorUp, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
 import { MicProcessor, newAudioContext } from './mic';
-import { keyName, micConstraints, resetVoiceSettings, updateSettings, useSettings, type Settings } from './settings';
+import { comboFromEvent, comboName, keyName, micConstraints, resetVoiceSettings, updateSettings, useSettings, type Settings } from './settings';
 import { activeMic, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, type ShareCodec, type ShareResolution } from './voice';
 import { setSoundsEnabled, soundsEnabled, playSound, SOUND_LABELS, type SoundName } from './sounds';
 
@@ -177,6 +177,7 @@ function VoiceSettings() {
     if (!capturing) return;
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       updateSettings({ pttKey: e.code === 'Escape' ? '' : e.code });
       setCapturing(false);
     };
@@ -241,6 +242,17 @@ function VoiceSettings() {
           </label>
         </div>
       )}
+
+      <h3>Atalhos</h3>
+      <p className="muted">
+        {(window as unknown as { nexoDesktop?: unknown }).nexoDesktop
+          ? 'Funcionam em qualquer lugar, até com o jogo em foco.'
+          : 'No navegador funcionam com a aba do Nexo em foco. No app de computador funcionam até com o jogo aberto.'}
+      </p>
+      <div className="field-row">
+        <Keybind label="Mutar / desmutar" value={s.muteKey} onChange={(v) => updateSettings({ muteKey: v })} />
+        <Keybind label="Ensurdecer / desensurdecer" value={s.deafenKey} onChange={(v) => updateSettings({ deafenKey: v })} />
+      </div>
 
       <h3>Processamento de voz</h3>
       <Toggle label="Amplificar microfone baixo automaticamente" hint="Aumenta sozinho o volume de microfones fracos para todo mundo te ouvir." checked={s.autoBoost} onChange={(v) => updateSettings({ autoBoost: v })} />
@@ -423,5 +435,35 @@ function NotifySettings() {
       )}
       <p className="muted"><Gear size={14} /> As configurações ficam salvas neste computador.</p>
     </>
+  );
+}
+
+/** Botão que grava uma combinação de teclas (ex.: Ctrl + Shift + M). Esc limpa. */
+function Keybind({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [capturing, setCapturing] = useState(false);
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === 'Escape') {
+        onChange('');
+        return setCapturing(false);
+      }
+      const combo = comboFromEvent(e);
+      if (!combo) return; // só Ctrl/Shift/Alt até agora: espera a tecla de verdade
+      onChange(combo);
+      setCapturing(false);
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [capturing, onChange]);
+  return (
+    <div className="field">
+      <span>{label}</span>
+      <button className={`keybind ${capturing ? 'capturing' : ''}`} onClick={() => setCapturing((c) => !c)}>
+        {capturing ? 'Aperte a combinação… (Esc limpa)' : comboName(value)}
+      </button>
+    </div>
   );
 }
