@@ -43,23 +43,51 @@ const needsMicProcessor = (s: Settings) => s.echoGate || s.autoBoost || s.strong
  * Volume final de cada áudio: volume geral × volume da pessoa (voz) ou da transmissão dela
  * (áudio da tela), no máximo 100%. Assim dá para baixar o jogo/vídeo sem baixar a voz.
  */
-function volumeFor(identity: string, source: Track.Source, deaf: boolean, s: Settings = getSettings()) {
+function volumeFor(identity: string, source: Track.Source, deaf: boolean, room?: Room | null, s: Settings = getSettings()) {
   if (deaf) return 0;
-  const own = source === Track.Source.ScreenShareAudio ? (s.streamVolumes[identity] ?? 100) : (s.userVolumes[identity] ?? 100);
-  return Math.min(1, (s.outputVolume / 100) * (own / 100));
+  const stream = source === Track.Source.ScreenShareAudio;
+  const own = stream ? (s.streamVolumes[identity] ?? 100) : (s.userVolumes[identity] ?? 100);
+  // Atenuação (como no Discord): o áudio das transmissões abaixa enquanto alguém fala.
+  let atten = 1;
+  if (stream && s.attenuation > 0 && room) {
+    const others = s.attenuateOthers && room.activeSpeakers.some((p) => p !== room.localParticipant);
+    const me = s.attenuateMe && room.localParticipant.isSpeaking;
+    if (others || me) atten = 1 - s.attenuation / 100;
+  }
+  return Math.min(1, (s.outputVolume / 100) * (own / 100) * atten);
 }
 import type { Gateway } from './store';
 
-export type ShareQuality = '720p30' | '1080p30' | '1080p60' | 'source60';
-export type ShareOptions = { quality: ShareQuality; audio: boolean; optimizeFor: 'detail' | 'motion' };
-
-/** Resolução, fps e taxa de bits de cada opção de qualidade da transmissão. */
-export const QUALITY: Record<ShareQuality, { label: string; width?: number; height?: number; fps: number; bitrate: number }> = {
-  '720p30': { label: '720p · 30 fps', width: 1280, height: 720, fps: 30, bitrate: 2_000_000 },
-  '1080p30': { label: '1080p · 30 fps', width: 1920, height: 1080, fps: 30, bitrate: 3_500_000 },
-  '1080p60': { label: '1080p · 60 fps', width: 1920, height: 1080, fps: 60, bitrate: 6_000_000 },
-  source60: { label: 'Nativa · 60 fps', fps: 60, bitrate: 10_000_000 },
+export type ShareResolution = '720' | '1080' | '1440' | 'native';
+export type ShareFps = 15 | 30 | 60;
+export type ShareCodec = 'h264' | 'vp9' | 'av1';
+export type ShareOptions = {
+  resolution: ShareResolution;
+  fps: ShareFps;
+  audio: boolean;
+  optimizeFor: 'detail' | 'motion';
+  codec: ShareCodec;
 };
+
+export const RESOLUTIONS: Record<ShareResolution, { label: string; width: number; height: number }> = {
+  '720': { label: '720p', width: 1280, height: 720 },
+  '1080': { label: '1080p', width: 1920, height: 1080 },
+  '1440': { label: '1440p', width: 2560, height: 1440 },
+  native: { label: 'Nativa', width: 0, height: 0 }, // 0 = sem teto: a tela no tamanho real
+};
+export const FPS_OPTIONS: ShareFps[] = [15, 30, 60];
+export const CODECS: Record<ShareCodec, { label: string; hint: string }> = {
+  h264: { label: 'H.264', hint: 'Usa a placa de vídeo na maioria dos PCs. Mais leve.' },
+  vp9: { label: 'VP9', hint: 'Imagem melhor com a mesma internet, mas pesa mais no processador.' },
+  av1: { label: 'AV1', hint: 'O mais eficiente. Só vale em PC novo; se não tiver suporte, volta para H.264.' },
+};
+
+/** Taxa de bits para a resolução e o fps escolhidos (a nativa conta como 1440p). */
+export function shareBitrate(res: ShareResolution, fps: ShareFps) {
+  const r = RESOLUTIONS[res];
+  const px = r.width ? r.width * r.height : 2560 * 1440;
+  return Math.round(Math.max(1_500_000, Math.min(12_000_000, px * fps * 0.055)));
+}
 
 export type VoiceUser = {
   identity: string;
@@ -105,8 +133,13 @@ export function useVoice(gateway: Gateway) {
     document.body.appendChild(audioBox.current);
   }
 
-  const autoSubscribe = (pub: RemoteTrackPublication) => {
+  const autoSubscribe = (pub: RemoteTrackPublication, identity?: string) => {
     if (pub.source === Track.Source.Microphone || pub.source === Track.Source.Camera) pub.setSubscribed(true);
+    // "Assistir transmissões automaticamente" nas configurações.
+    else if (identity && getSettings().autoWatchStreams && (pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio)) {
+      pub.setSubscribed(true);
+      setWatching((w) => ({ ...w, [identity]: true }));
+    }
   };
 
   const leave = useCallback(async () => {
@@ -115,7 +148,7 @@ export function useVoice(gateway: Gateway) {
     roomRef.current = null;
     await room?.disconnect();
     activeMic = null;
-    if (room) playSound('leave');
+    if (room) playSound('disconnect');
     if (audioBox.current) audioBox.current.innerHTML = '';
     setFloating([]);
     setChannelId(null);
@@ -140,7 +173,7 @@ export function useVoice(gateway: Gateway) {
           adaptiveStream: true,
           dynacast: true,
           // Voz: Opus com DTX (não manda nada no silêncio) e RED (redundância contra perda de pacotes).
-          publishDefaults: { dtx: true, red: true },
+          publishDefaults: { dtx: true, red: true, audioPreset: { maxBitrate: getSettings().voiceBitrate * 1000 } },
           audioCaptureDefaults: micConstraints(),
           audioOutput: getSettings().outputDeviceId ? { deviceId: getSettings().outputDeviceId } : undefined,
           videoCaptureDefaults: getSettings().videoDeviceId ? { deviceId: getSettings().videoDeviceId } : undefined,
@@ -148,8 +181,9 @@ export function useVoice(gateway: Gateway) {
         roomRef.current = room;
 
         room
-          .on(RoomEvent.TrackPublished, (pub, _p) => {
-            autoSubscribe(pub);
+          .on(RoomEvent.TrackPublished, (pub, participant) => {
+            if (pub.source === Track.Source.ScreenShare) playSound('stream_start');
+            autoSubscribe(pub, participant.identity);
             rerender();
           })
           .on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub, p) => {
@@ -162,7 +196,7 @@ export function useVoice(gateway: Gateway) {
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
               feedRemoteAudio(room);
-              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, deafRef.current));
+              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, deafRef.current, room));
             }
             rerender();
           })
@@ -172,6 +206,7 @@ export function useVoice(gateway: Gateway) {
             rerender();
           })
           .on(RoomEvent.TrackUnpublished, (pub, p) => {
+            if (pub.source === Track.Source.ScreenShare) playSound('stream_end');
             if (pub.source === Track.Source.ScreenShare) setWatching(({ [p.identity]: _, ...rest }) => rest);
             rerender();
           })
@@ -197,7 +232,10 @@ export function useVoice(gateway: Gateway) {
           })
           .on(RoomEvent.TrackMuted, rerender)
           .on(RoomEvent.TrackUnmuted, rerender)
-          .on(RoomEvent.ActiveSpeakersChanged, rerender)
+          .on(RoomEvent.ActiveSpeakersChanged, () => {
+            applyVolumes(); // atenuação das transmissões depende de quem está falando
+            rerender();
+          })
           .on(RoomEvent.LocalTrackPublished, rerender)
           .on(RoomEvent.LocalTrackUnpublished, rerender)
           .on(RoomEvent.Reconnecting, () => setReconnecting(true))
@@ -220,7 +258,7 @@ export function useVoice(gateway: Gateway) {
         } catch (e) {
           throw new Error(`não conectou ao servidor de voz (${url}). ${(e as Error).message}`);
         }
-        room.remoteParticipants.forEach((p) => p.trackPublications.forEach(autoSubscribe));
+        room.remoteParticipants.forEach((p) => p.trackPublications.forEach((pub) => autoSubscribe(pub, p.identity)));
         // Sem microfone (permissão negada ou nenhum dispositivo) a pessoa ainda entra, só que mutada.
         try {
           await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, micConstraints());
@@ -284,7 +322,7 @@ export function useVoice(gateway: Gateway) {
 
   const applyVolumes = useCallback(() => {
     roomRef.current?.remoteParticipants.forEach((p) =>
-      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, pub.source, deafRef.current))),
+      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, pub.source, deafRef.current, roomRef.current))),
     );
   }, []);
 
@@ -310,11 +348,33 @@ export function useVoice(gateway: Gateway) {
           await track?.restartTrack(micConstraints(s));
         }
         if (needsMicProcessor(s) !== needsMicProcessor(before)) await attachMicProcessor(room);
+        if (s.voiceBitrate !== before.voiceBitrate) {
+          const sender = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.sender;
+          if (sender) {
+            const params = sender.getParameters();
+            for (const e of params.encodings ?? []) e.maxBitrate = s.voiceBitrate * 1000;
+            await sender.setParameters(params);
+          }
+        }
       } catch (e) {
         console.warn('Não deu para trocar o dispositivo', e);
       }
     });
   }, [applyVolumes]);
+
+  // Som de "aperte para falar" ativado/desativado, só dentro da call.
+  useEffect(() => {
+    if (!channelId) return;
+    const isKey = (e: KeyboardEvent) => getSettings().inputMode === 'ptt' && !!getSettings().pttKey && e.code === getSettings().pttKey;
+    const down = (e: KeyboardEvent) => isKey(e) && !e.repeat && !muted && !deafRef.current && playSound('ptt_on');
+    const up = (e: KeyboardEvent) => isKey(e) && !muted && !deafRef.current && playSound('ptt_off');
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [channelId, muted]);
 
   // Sai da sala ao fechar a aba
   useEffect(() => () => void roomRef.current?.disconnect(), []);
@@ -334,7 +394,7 @@ export function useVoice(gateway: Gateway) {
   const toggleDeafen = () => {
     const next = !deafRef.current;
     deafRef.current = next;
-    playSound(next ? 'mute' : 'unmute');
+    playSound(next ? 'deafen' : 'undeafen');
     setDeafened(next);
     applyVolumes();
     const room = roomRef.current;
@@ -357,7 +417,8 @@ export function useVoice(gateway: Gateway) {
   const startShare = async (opts: ShareOptions) => {
     const lp = roomRef.current?.localParticipant;
     if (!lp) return;
-    const q = QUALITY[opts.quality];
+    const r = RESOLUTIONS[opts.resolution];
+    const bitrate = shareBitrate(opts.resolution, opts.fps);
     await lp.setScreenShareEnabled(
       true,
       {
@@ -368,7 +429,7 @@ export function useVoice(gateway: Gateway) {
           : false,
         systemAudio: opts.audio ? 'include' : 'exclude',
         // Nativa: sem limite de tamanho (largura 0 = sem teto), só o fps.
-        resolution: { width: q.width ?? 0, height: q.height ?? 0, frameRate: q.fps },
+        resolution: { width: r.width, height: r.height, frameRate: opts.fps },
         // Sempre "motion": com "detail" o Chrome trata como apresentação e, quando falta CPU ou
         // internet, pula quadros em vez de baixar a resolução, o que dá a sensação de travada.
         contentHint: 'motion',
@@ -376,26 +437,66 @@ export function useVoice(gateway: Gateway) {
         surfaceSwitching: 'include',
       },
       {
-        // H.264 tem codificação por hardware na maioria dos PCs; VP9 em software travava o fps e a voz.
-        videoCodec: 'h264',
-        backupCodec: false,
+        // H.264 tem codificação por hardware na maioria dos PCs; VP9 e AV1 pesam mais.
+        // Com VP9/AV1 vai uma cópia em H.264 junto para quem não consegue decodificar.
+        videoCodec: opts.codec,
+        backupCodec: opts.codec !== 'h264' ? { codec: 'h264' } : false,
         // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
         simulcast: false,
-        screenShareEncoding: { maxBitrate: q.bitrate, maxFramerate: q.fps, priority: 'high' },
+        screenShareEncoding: { maxBitrate: bitrate, maxFramerate: opts.fps, priority: 'high' },
         // Equilibrado: divide a perda entre resolução e fps.
         // Jogo/vídeo: segura o fps e reduz a resolução quando a internet ou a CPU não dão conta.
         degradationPreference: opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate',
       },
     );
-    // O Chrome captura a tela a 30 fps se ninguém pedir mais. Pede os 60 fps direto na captura
+    // O Chrome captura a tela a 30 fps se ninguém pedir mais. Pede o fps direto na captura
     // (vale também para a qualidade nativa, em que a resolução fica livre).
     const screen = lp.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack;
-    if (screen && q.fps >= 60) await screen.applyConstraints({ frameRate: { ideal: 60, min: 30 } }).catch(() => {});
+    if (screen && opts.fps >= 60) await screen.applyConstraints({ frameRate: { ideal: 60, min: 30 } }).catch(() => {});
+    shareOpts.current = opts;
     rerender();
+  };
+
+  const shareOpts = useRef<ShareOptions | null>(null);
+
+  /** Muda resolução, fps e otimização no meio da transmissão, sem escolher a tela de novo. */
+  const updateShare = async (opts: ShareOptions) => {
+    const pub = roomRef.current?.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    const track = pub?.track;
+    if (!track) return;
+    const r = RESOLUTIONS[opts.resolution];
+    await track.mediaStreamTrack
+      .applyConstraints({
+        ...(r.width ? { width: { ideal: r.width }, height: { ideal: r.height } } : { width: { ideal: 7680 }, height: { ideal: 4320 } }),
+        frameRate: { ideal: opts.fps },
+      })
+      .catch(() => {});
+    const sender = track.sender;
+    if (sender) {
+      const params = sender.getParameters();
+      for (const e of params.encodings ?? []) {
+        e.maxBitrate = shareBitrate(opts.resolution, opts.fps);
+        e.maxFramerate = opts.fps;
+      }
+      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+        opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate';
+      await sender.setParameters(params).catch(() => {});
+    }
+    shareOpts.current = { ...opts, codec: shareOpts.current?.codec ?? opts.codec, audio: shareOpts.current?.audio ?? opts.audio };
+    rerender();
+  };
+
+  /** Troca a tela ou janela transmitida (o navegador pergunta de novo) mantendo a qualidade. */
+  const switchShare = async () => {
+    const opts = shareOpts.current;
+    if (!opts) return;
+    await roomRef.current?.localParticipant.setScreenShareEnabled(false);
+    await startShare(opts);
   };
 
   const stopShare = async () => {
     await roomRef.current?.localParticipant.setScreenShareEnabled(false);
+    shareOpts.current = null;
     rerender();
   };
 
@@ -454,6 +555,9 @@ export function useVoice(gateway: Gateway) {
     toggleCamera,
     startShare,
     stopShare,
+    updateShare,
+    switchShare,
+    shareOptions: shareOpts.current,
     setWatch,
     floating,
     sendReaction,

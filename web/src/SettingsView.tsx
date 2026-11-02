@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mic, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
+import { Mic, MonitorUp, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
 import { MicProcessor, newAudioContext } from './mic';
-import { keyName, micConstraints, updateSettings, useSettings, type Settings } from './settings';
-import { activeMic } from './voice';
-import { setSoundsEnabled, soundsEnabled, playSound } from './sounds';
+import { keyName, micConstraints, resetVoiceSettings, updateSettings, useSettings, type Settings } from './settings';
+import { activeMic, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, type ShareCodec, type ShareResolution } from './voice';
+import { setSoundsEnabled, soundsEnabled, playSound, SOUND_LABELS, type SoundName } from './sounds';
 
-type Tab = 'voice' | 'video' | 'notify';
+type Tab = 'voice' | 'video' | 'stream' | 'notify';
 
 /** Tela de configurações: voz, vídeo e notificações. */
 export function SettingsView({ onClose }: { onClose: () => void }) {
@@ -21,11 +21,13 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
         <h3>Configurações do app</h3>
         <button className={tab === 'voice' ? 'active' : ''} onClick={() => setTab('voice')}><Mic size={16} /> Voz</button>
         <button className={tab === 'video' ? 'active' : ''} onClick={() => setTab('video')}><Video size={16} /> Vídeo</button>
+        <button className={tab === 'stream' ? 'active' : ''} onClick={() => setTab('stream')}><MonitorUp size={16} /> Transmissão</button>
         <button className={tab === 'notify' ? 'active' : ''} onClick={() => setTab('notify')}><Bell size={16} /> Notificações</button>
       </nav>
       <section className="settings-body">
         {tab === 'voice' && <VoiceSettings />}
         {tab === 'video' && <VideoSettings />}
+        {tab === 'stream' && <StreamSettings />}
         {tab === 'notify' && <NotifySettings />}
       </section>
       <button className="settings-close" title="Fechar (Esc)" onClick={onClose}><X size={20} /><small>ESC</small></button>
@@ -242,13 +244,21 @@ function VoiceSettings() {
 
       <h3>Processamento de voz</h3>
       <Toggle label="Amplificar microfone baixo automaticamente" hint="Aumenta sozinho o volume de microfones fracos para todo mundo te ouvir." checked={s.autoBoost} onChange={(v) => updateSettings({ autoBoost: v })} />
-      <Toggle
-        label="Supressão de ruído forte (IA)"
-        hint="Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise)."
-        checked={s.strongNoiseSuppression}
-        onChange={(v) => updateSettings({ strongNoiseSuppression: v })}
-      />
-      <Toggle label="Supressão de ruído do navegador" hint="A supressão básica do navegador. Pode deixar ligada junto com a forte." checked={s.noiseSuppression} onChange={(v) => updateSettings({ noiseSuppression: v })} />
+      <div className="field">
+        <span>Supressão de ruído</span>
+        <div className="options">
+          <button className={`option ${s.strongNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, noiseSuppression: true })}>Forte (IA)</button>
+          <button className={`option ${!s.strongNoiseSuppression && s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: true })}>Padrão</button>
+          <button className={`option ${!s.strongNoiseSuppression && !s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: false })}>Nenhuma</button>
+        </div>
+        <small className="muted">
+          {s.strongNoiseSuppression
+            ? 'Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise).'
+            : s.noiseSuppression
+              ? 'A supressão básica do navegador: tira ruído constante.'
+              : 'Sem filtro: bom para música ou microfone de estúdio.'}
+        </small>
+      </div>
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
       <Toggle
         label="Supressão de eco extra"
@@ -257,6 +267,72 @@ function VoiceSettings() {
         onChange={(v) => updateSettings({ echoGate: v })}
       />
       <Toggle label="Controle automático de ganho" hint="Ajusta o volume do microfone sozinho." checked={s.autoGainControl} onChange={(v) => updateSettings({ autoGainControl: v })} />
+
+      <h3>Qualidade da voz</h3>
+      <div className="options">
+        {[32, 64, 96, 128].map((k) => (
+          <button key={k} className={`option ${s.voiceBitrate === k ? 'selected' : ''}`} onClick={() => updateSettings({ voiceBitrate: k })}>
+            {k} kbps{k === 64 ? ' (padrão)' : ''}
+          </button>
+        ))}
+      </div>
+      <small className="muted">Quanto maior, mais fiel a sua voz chega (bom para música), e mais internet usa. 32 kbps ajuda em internet fraca.</small>
+
+      <h3>Atenuação</h3>
+      <p className="muted">Abaixa o som das transmissões enquanto alguém fala, para a conversa não sumir no meio do jogo ou do vídeo.</p>
+      <label className="field">
+        <span>Atenuação · {s.attenuation}%</span>
+        <input type="range" min={0} max={100} value={s.attenuation} onChange={(e) => updateSettings({ attenuation: +e.target.value })} />
+      </label>
+      <Toggle label="Quando outras pessoas estiverem falando" checked={s.attenuateOthers} onChange={(v) => updateSettings({ attenuateOthers: v })} />
+      <Toggle label="Quando eu estiver falando" checked={s.attenuateMe} onChange={(v) => updateSettings({ attenuateMe: v })} />
+
+      <h3>Redefinir</h3>
+      <button onClick={() => confirm('Voltar todas as configurações de voz para o padrão?') && resetVoiceSettings()}>Redefinir configurações de voz</button>
+    </>
+  );
+}
+
+function StreamSettings() {
+  const s = useSettings();
+  return (
+    <>
+      <h2>Transmissão</h2>
+      <p className="muted">É o que vem marcado quando você clica em "Transmitir tela". Também muda sozinho para a última escolha que você fizer lá.</p>
+      <h3>Resolução</h3>
+      <div className="options">
+        {(Object.keys(RESOLUTIONS) as ShareResolution[]).map((r) => (
+          <button key={r} className={`option ${s.streamResolution === r ? 'selected' : ''}`} onClick={() => updateSettings({ streamResolution: r })}>{RESOLUTIONS[r].label}</button>
+        ))}
+      </div>
+      <h3>Taxa de quadros</h3>
+      <div className="options">
+        {FPS_OPTIONS.map((f) => (
+          <button key={f} className={`option ${s.streamFps === f ? 'selected' : ''}`} onClick={() => updateSettings({ streamFps: f })}>{f} fps</button>
+        ))}
+      </div>
+      <small className="muted">Usa até {(shareBitrate(s.streamResolution, s.streamFps) / 1_000_000).toFixed(1)} Mbps de upload.</small>
+      <h3>Otimizar para</h3>
+      <div className="options">
+        <button className={`option ${s.streamOptimize === 'motion' ? 'selected' : ''}`} onClick={() => updateSettings({ streamOptimize: 'motion' })}>Movimento fluido</button>
+        <button className={`option ${s.streamOptimize === 'detail' ? 'selected' : ''}`} onClick={() => updateSettings({ streamOptimize: 'detail' })}>Texto nítido</button>
+      </div>
+      <h3>Codec de vídeo</h3>
+      <div className="options">
+        {(Object.keys(CODECS) as ShareCodec[]).map((c) => (
+          <button key={c} className={`option ${s.streamCodec === c ? 'selected' : ''}`} onClick={() => updateSettings({ streamCodec: c })}>{CODECS[c].label}</button>
+        ))}
+      </div>
+      <small className="muted">{CODECS[s.streamCodec].hint}</small>
+      <h3>Áudio e quem assiste</h3>
+      <Toggle label="Transmitir o áudio junto" hint="Som do jogo, vídeo ou aba que você está mostrando." checked={s.streamAudio} onChange={(v) => updateSettings({ streamAudio: v })} />
+      <Toggle
+        label="Assistir transmissões automaticamente"
+        hint="Começa a ver a tela de quem transmitir sem precisar clicar em Assistir. Usa mais internet."
+        checked={s.autoWatchStreams}
+        onChange={(v) => updateSettings({ autoWatchStreams: v })}
+      />
+      <p className="muted">Para baixar o volume de uma transmissão, clique nela com o botão direito. A atenuação fica em Voz.</p>
     </>
   );
 }
@@ -298,6 +374,7 @@ function VideoSettings() {
 }
 
 function NotifySettings() {
+  const s = useSettings();
   const [sounds, setSounds] = useState(soundsEnabled);
   return (
     <>
@@ -312,7 +389,35 @@ function NotifySettings() {
           if (v) playSound('join');
         }}
       />
-      <p className="muted"><Volume2 size={14} /> O volume dos sons segue o volume do sistema.</p>
+      {sounds && (
+        <>
+          <label className="field">
+            <span><Volume2 size={14} /> Volume dos sons · {s.soundVolume}%</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={s.soundVolume}
+              onChange={(e) => updateSettings({ soundVolume: +e.target.value })}
+              onPointerUp={() => playSound('message')}
+            />
+          </label>
+          <h3>Sons</h3>
+          {(Object.keys(SOUND_LABELS) as SoundName[]).map((name) => (
+            <div key={name} className="sound-row">
+              <Toggle
+                label={SOUND_LABELS[name]}
+                checked={!s.soundsOff[name]}
+                onChange={(v) => {
+                  updateSettings({ soundsOff: { ...s.soundsOff, [name]: !v } });
+                  if (v) setTimeout(() => playSound(name), 0);
+                }}
+              />
+              <button className="link" onClick={() => playSound(name)}>Ouvir</button>
+            </div>
+          ))}
+        </>
+      )}
       <p className="muted"><Gear size={14} /> As configurações ficam salvas neste computador.</p>
     </>
   );
