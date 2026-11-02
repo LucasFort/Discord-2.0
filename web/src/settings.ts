@@ -20,6 +20,19 @@ export type Settings = {
   autoSensitivity: boolean;
   sensitivity: number; // dB, -100 a 0
   userVolumes: Record<string, number>; // id do usuário -> 0–200 (%)
+  voiceBitrate: number; // kbps da sua voz (Opus)
+  attenuation: number; // 0–100 (%): quanto o áudio das transmissões abaixa quando alguém fala
+  attenuateOthers: boolean; // abaixa quando outras pessoas falam
+  attenuateMe: boolean; // abaixa quando você fala
+  soundVolume: number; // 0–100 (%) dos sons do app
+  soundsOff: Partial<Record<string, boolean>>; // sons desligados um por um
+  // Transmissão: o que vem marcado quando você abre "Transmitir tela" (salva a última escolha).
+  streamResolution: '720' | '1080' | '1440' | 'native';
+  streamFps: 15 | 30 | 60;
+  streamOptimize: 'detail' | 'motion';
+  streamAudio: boolean;
+  streamCodec: 'h264' | 'vp9' | 'av1';
+  autoWatchStreams: boolean; // começa a assistir sozinho quando alguém transmite
   streamVolumes: Record<string, number>; // id de quem transmite -> 0–100 (%) do áudio da transmissão
 };
 
@@ -41,6 +54,18 @@ const DEFAULTS: Settings = {
   autoSensitivity: true,
   sensitivity: -50,
   userVolumes: {},
+  voiceBitrate: 64,
+  attenuation: 0,
+  attenuateOthers: true,
+  attenuateMe: false,
+  soundVolume: 100,
+  soundsOff: {},
+  streamResolution: 'native',
+  streamFps: 60,
+  streamOptimize: 'motion',
+  streamAudio: true,
+  streamCodec: 'h264',
+  autoWatchStreams: false,
   streamVolumes: {},
 };
 
@@ -58,6 +83,14 @@ let current = load();
 const listeners = new Set<(s: Settings) => void>();
 
 export const getSettings = () => current;
+
+/** Volta as opções de voz para o padrão, sem mexer em volumes de pessoas, transmissão e sons. */
+export function resetVoiceSettings() {
+  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams'];
+  const next = { ...DEFAULTS } as Record<string, unknown>;
+  for (const k of keep) next[k] = current[k];
+  updateSettings(next as Partial<Settings>);
+}
 
 export function updateSettings(patch: Partial<Settings>) {
   current = { ...current, ...patch };

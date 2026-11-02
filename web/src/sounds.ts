@@ -20,7 +20,9 @@ function audio() {
   return ctx;
 }
 
+let vol = 1; // volume dos sons (configurações)
 function tone(freq: number, start: number, dur: number, volume = 0.12, type: OscillatorType = 'sine') {
+  volume = Math.max(0.0002, volume * vol);
   const c = audio();
   const t = c.currentTime + start;
   const osc = c.createOscillator();
@@ -35,11 +37,34 @@ function tone(freq: number, start: number, dur: number, volume = 0.12, type: Osc
   osc.stop(t + dur + 0.05);
 }
 
-export type SoundName = 'join' | 'leave' | 'mute' | 'unmute' | 'message' | 'reaction';
+export type SoundName =
+  | 'join' | 'leave' | 'disconnect' | 'mute' | 'unmute' | 'deafen' | 'undeafen'
+  | 'ptt_on' | 'ptt_off' | 'stream_start' | 'stream_end' | 'message' | 'reaction';
+
+/** Sons que dá para desligar um por um nas configurações (os nomes seguem os do Discord). */
+export const SOUND_LABELS: Record<SoundName, string> = {
+  message: 'Mensagem',
+  reaction: 'Reação',
+  mute: 'Microfone silenciado',
+  unmute: 'Microfone ativado',
+  deafen: 'Ensurdecido',
+  undeafen: 'Desensurdecido',
+  join: 'Usuário entrou',
+  leave: 'Usuário saiu',
+  disconnect: 'Voz desconectada',
+  ptt_on: 'Aperte para falar: ativado',
+  ptt_off: 'Aperte para falar: desativado',
+  stream_start: 'Transmissão iniciada',
+  stream_end: 'Transmissão encerrada',
+};
 
 export function playSound(name: SoundName) {
   try {
     if (localStorage.getItem('sounds') === 'off') return;
+    const s = getSettings();
+    if (s.soundsOff[name]) return;
+    vol = Math.max(0, Math.min(1, s.soundVolume / 100));
+    if (vol === 0) return;
     switch (name) {
       case 'join':
         tone(523.25, 0, 0.18); // dó
@@ -61,6 +86,35 @@ export function playSound(name: SoundName) {
         break;
       case 'reaction':
         tone(1046.5, 0, 0.1, 0.05);
+        break;
+      case 'disconnect':
+        tone(659.25, 0, 0.14);
+        tone(493.88, 0.09, 0.16);
+        tone(329.63, 0.18, 0.3);
+        break;
+      case 'deafen':
+        tone(392, 0, 0.09, 0.08, 'triangle');
+        tone(293.66, 0.07, 0.12, 0.08, 'triangle');
+        break;
+      case 'undeafen':
+        tone(587.33, 0, 0.09, 0.08, 'triangle');
+        tone(783.99, 0.07, 0.12, 0.08, 'triangle');
+        break;
+      case 'ptt_on':
+        tone(880, 0, 0.05, 0.05, 'square');
+        break;
+      case 'ptt_off':
+        tone(660, 0, 0.05, 0.04, 'square');
+        break;
+      case 'stream_start':
+        tone(523.25, 0, 0.12, 0.09);
+        tone(659.25, 0.08, 0.12, 0.09);
+        tone(1046.5, 0.16, 0.25, 0.08);
+        break;
+      case 'stream_end':
+        tone(1046.5, 0, 0.12, 0.08);
+        tone(659.25, 0.08, 0.12, 0.08);
+        tone(523.25, 0.16, 0.25, 0.08);
         break;
     }
   } catch {

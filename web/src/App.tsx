@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
-  PhoneOff, Plus, Radio, Trash2, UserPlus, Video, VideoOff, Volume2, VolumeX, X,
+  PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Video, VideoOff, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
@@ -11,7 +11,10 @@ import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings } from './settings';
 import { useStore, type Gateway, type State } from './store';
-import { CALL_EMOJIS, QUALITY, useVoice, type ShareOptions, type ShareQuality, type Voice, type VoiceUser } from './voice';
+import {
+  CALL_EMOJIS, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, useVoice,
+  type ShareCodec, type ShareFps, type ShareOptions, type ShareResolution, type Voice, type VoiceUser,
+} from './voice';
 
 export function App() {
   const [authed, setAuthed] = useState(!!getToken());
@@ -545,7 +548,10 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
           {voice.camera ? <Video size={22} /> : <VideoOff size={22} />}
         </button>
         {voice.sharing ? (
-          <button className="round on" title="Parar transmissão" onClick={voice.stopShare}><MonitorX size={22} /></button>
+          <>
+            <button className="round" title="Qualidade da transmissão" onClick={() => setShareOpen(true)}><SlidersHorizontal size={22} /></button>
+            <button className="round on" title="Parar transmissão" onClick={voice.stopShare}><MonitorX size={22} /></button>
+          </>
         ) : (
           <button className="round accent" title="Transmitir tela" onClick={() => setShareOpen(true)}><MonitorUp size={22} /></button>
         )}
@@ -555,9 +561,15 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
       {menu && <CallMenu menu={menu} voice={voice} onClose={() => setMenu(null)} onFullscreen={() => setFocus(menu.user.identity)} />}
       {shareOpen && (
         <ShareDialog
+          live={voice.sharing}
           onClose={() => setShareOpen(false)}
+          onSwitch={async () => {
+            setShareOpen(false);
+            await voice.switchShare().catch((e) => e?.name !== 'NotAllowedError' && alert(`Falha ao trocar a tela: ${e.message}`));
+          }}
           onStart={async (o) => {
             setShareOpen(false);
+            if (voice.sharing) return voice.updateShare(o);
             await voice.startShare(o).catch((e) => e?.name !== 'NotAllowedError' && alert(`Falha ao transmitir: ${e.message}`));
           }}
         />
@@ -679,34 +691,72 @@ function StreamVolume({ identity, className }: { identity: string; className: st
   );
 }
 
-function ShareDialog({ onClose, onStart }: { onClose: () => void; onStart: (o: ShareOptions) => void }) {
-  const [quality, setQuality] = useState<ShareQuality>('source60');
-  const [audio, setAudio] = useState(true);
-  const [optimizeFor, setOptimizeFor] = useState<'detail' | 'motion'>('motion');
+/**
+ * Janela "Transmitir tela" (como o Go Live do Discord): resolução, fps, otimização, codec e áudio.
+ * Abre com a última escolha. Durante a transmissão serve para mudar a qualidade ao vivo.
+ */
+function ShareDialog({ live, onClose, onStart, onSwitch }: {
+  live?: boolean;
+  onClose: () => void;
+  onStart: (o: ShareOptions) => void;
+  onSwitch?: () => void;
+}) {
+  const s = useSettings();
+  const [resolution, setResolution] = useState<ShareResolution>(s.streamResolution);
+  const [fps, setFps] = useState<ShareFps>(s.streamFps);
+  const [optimizeFor, setOptimizeFor] = useState<'detail' | 'motion'>(s.streamOptimize);
+  const [codec, setCodec] = useState<ShareCodec>(s.streamCodec);
+  const [audio, setAudio] = useState(s.streamAudio);
+  const mbps = (shareBitrate(resolution, fps) / 1_000_000).toFixed(1);
+  const go = () => {
+    updateSettings({ streamResolution: resolution, streamFps: fps, streamOptimize: optimizeFor, streamCodec: codec, streamAudio: audio });
+    onStart({ resolution, fps, optimizeFor, codec, audio });
+  };
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Transmitir tela</h2>
-        <p className="muted">Depois de confirmar, o navegador pergunta se você quer mostrar a tela inteira, uma janela ou uma aba.</p>
-        <h3>Qualidade</h3>
+        <h2>{live ? 'Qualidade da transmissão' : 'Transmitir tela'}</h2>
+        <p className="muted">
+          {live
+            ? 'Muda na hora, sem parar a transmissão.'
+            : 'Depois de confirmar, o navegador pergunta se você quer mostrar a tela inteira, uma janela ou uma aba.'}
+        </p>
+        <h3>Resolução</h3>
         <div className="options">
-          {(Object.keys(QUALITY) as ShareQuality[]).map((q) => (
-            <button key={q} className={`option ${q === quality ? 'selected' : ''}`} onClick={() => setQuality(q)}>
-              {QUALITY[q].label}
-            </button>
+          {(Object.keys(RESOLUTIONS) as ShareResolution[]).map((r) => (
+            <button key={r} className={`option ${r === resolution ? 'selected' : ''}`} onClick={() => setResolution(r)}>{RESOLUTIONS[r].label}</button>
           ))}
         </div>
+        <h3>Taxa de quadros</h3>
+        <div className="options">
+          {FPS_OPTIONS.map((f) => (
+            <button key={f} className={`option ${f === fps ? 'selected' : ''}`} onClick={() => setFps(f)}>{f} fps</button>
+          ))}
+        </div>
+        <small className="muted">Usa até {mbps} Mbps de upload.</small>
         <h3>Otimizar para</h3>
         <div className="options">
-          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Equilibrado (recomendado)</button>
-          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido (jogos)</button>
+          <button className={`option ${optimizeFor === 'motion' ? 'selected' : ''}`} onClick={() => setOptimizeFor('motion')}>Movimento fluido (jogos e vídeo)</button>
+          <button className={`option ${optimizeFor === 'detail' ? 'selected' : ''}`} onClick={() => setOptimizeFor('detail')}>Texto nítido (código, documentos)</button>
         </div>
-        <label className="check">
-          <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} /> Transmitir o áudio também
-        </label>
+        {!live && (
+          <>
+            <h3>Codec de vídeo</h3>
+            <div className="options">
+              {(Object.keys(CODECS) as ShareCodec[]).map((c) => (
+                <button key={c} className={`option ${c === codec ? 'selected' : ''}`} title={CODECS[c].hint} onClick={() => setCodec(c)}>{CODECS[c].label}</button>
+              ))}
+            </div>
+            <small className="muted">{CODECS[codec].hint}</small>
+            <label className="check">
+              <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} /> Transmitir o áudio também
+            </label>
+          </>
+        )}
         <div className="modal-actions">
+          {live && onSwitch && <button onClick={onSwitch}>Trocar tela ou janela</button>}
           <button className="link" onClick={onClose}>Cancelar</button>
-          <button className="primary" onClick={() => onStart({ quality, audio, optimizeFor })}>Ao vivo</button>
+          <button className="primary" onClick={go}>{live ? 'Aplicar' : 'Ao vivo'}</button>
         </div>
       </div>
     </div>

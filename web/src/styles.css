@@ -293,3 +293,6 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
   .settings-close small { display: none; }
   .field-row { grid-template-columns: 1fr; }
 }
+
+.sound-row { display: flex; align-items: center; gap: 8px; }
+.sound-row .toggle-row { flex: 1; }
