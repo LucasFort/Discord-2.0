@@ -306,14 +306,14 @@ function VoiceSettings() {
       <div className="field">
         <span>Supressão de ruído</span>
         <div className="options">
-          <button className={`option ${s.strongNoiseSuppression && s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: true, noiseSuppression: true })}>Máxima (IA)</button>
-          <button className={`option ${s.strongNoiseSuppression && !s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: false, noiseSuppression: true })}>Forte (IA)</button>
+          <button className={`option ${s.strongNoiseSuppression && s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: true, noiseSuppression: true })}>Máxima (IA, pode distorcer)</button>
+          <button className={`option ${s.strongNoiseSuppression && !s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: false, noiseSuppression: true })}>Forte (IA, recomendada)</button>
           <button className={`option ${!s.strongNoiseSuppression && s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: true })}>Padrão</button>
           <button className={`option ${!s.strongNoiseSuppression && !s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: false })}>Nenhuma</button>
         </div>
         <small className="muted">
           {s.strongNoiseSuppression && s.maxNoiseSuppression
-            ? 'Passa a voz duas vezes pela IA: corta teclado, mouse, ventilador, TV e gente falando longe. Se sua voz ficar robótica, use a Forte.'
+            ? 'Passa a voz duas vezes pela IA: corta até gente falando longe, mas em muitos microfones deixa a voz metálica ou robótica. Se alguém reclamar de barulho estranho na sua voz, volte para a Forte.'
             : s.strongNoiseSuppression
               ? 'Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise).'
               : s.noiseSuppression
