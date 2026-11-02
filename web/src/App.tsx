@@ -11,7 +11,7 @@ import { useUpdateAvailable } from './update';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings } from './settings';
-import { useStore, type Gateway, type State } from './store';
+import { useStore, type Gateway, type State, type VoiceFlags } from './store';
 import {
   CALL_EMOJIS, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, useVoice,
   type ShareCodec, type ShareFps, type ShareOptions, type ShareResolution, type Voice, type VoiceUser,
@@ -80,11 +80,20 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const { state, dispatch, gateway, failures } = useStore(onLogout);
   const voice = useVoice(gateway);
 
-  // Se a conexão em tempo real caiu e voltou, avisa de novo em qual canal de voz estamos.
+  // Conta para todo mundo em qual canal de voz estamos e se estamos mutados, ensurdecidos,
+  // transmitindo ou com câmera (aparece na lista ao lado). Repete quando a conexão volta.
   useEffect(() => {
-    if (state.ready && voice.channelId) gateway.send({ op: 'voice_state', channel_id: voice.channelId });
+    if (!state.ready || !voice.channelId) return;
+    gateway.send({
+      op: 'voice_state',
+      channel_id: voice.channelId,
+      self_mute: voice.muted || voice.deafened,
+      self_deaf: voice.deafened,
+      self_stream: voice.sharing,
+      self_video: voice.camera,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.connection]);
+  }, [state.connection, state.ready, voice.channelId, voice.muted, voice.deafened, voice.sharing, voice.camera]);
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
@@ -207,7 +216,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
       <main className="content">
         {view === 'voice' && voice.channelId ? (
-          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onSettings={() => setSettingsOpen(true)} />
+          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} voiceFlags={state.voiceFlags} onSettings={() => setSettingsOpen(true)} />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
         ) : (
@@ -261,11 +270,19 @@ function ChannelList(props: {
             {type === 'voice' &&
               guild.members
                 .filter((m) => state.voice[m.id] === c.id)
-                .map((m) => (
+                .map((m) => {
+                  const f = state.voiceFlags[m.id] ?? {};
+                  return (
                   <div key={m.id} className={`voice-member ${voiceSpeaking?.has(m.id) ? 'speaking' : ''}`}>
-                    <Avatar user={m} size={20} /> {m.display_name}
+                    <Avatar user={m} size={20} /> <span className="voice-member-name">{m.display_name}</span>
+                    <span className="voice-member-icons">
+                      {f.self_stream && <span className="live small">AO VIVO</span>}
+                      {f.self_video && <Video size={14} aria-label="Câmera ligada" />}
+                      {f.self_deaf ? <HeadphoneOff size={14} className="off" aria-label="Ensurdecido" /> : f.self_mute && <MicOff size={14} className="off" aria-label="Mutado" />}
+                    </span>
                   </div>
-                ))}
+                  );
+                })}
           </div>
         ))}
     </>
@@ -477,11 +494,11 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   );
 }
 
-function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelName: string; onSettings: () => void }) {
-  const settings = useSettings();
+function VoiceView({ voice, channelName, voiceFlags, onSettings }: { voice: Voice; channelName: string; voiceFlags: State['voiceFlags']; onSettings: () => void }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [stageStats, setStageStats] = useState(false);
+  // Em destaque: 's:<id>' para a transmissão de alguém, 'u:<id>' para a pessoa (câmera ou avatar).
   const [focus, setFocus] = useState<string | null>(null);
   const [menu, setMenu] = useState<CallMenuState | null>(null);
   const openMenu = (e: React.MouseEvent, user: VoiceUser, kind: CallMenuState['kind']) => {
@@ -490,7 +507,44 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
     setMenu({ x: e.clientX, y: e.clientY, user, kind });
   };
   const streams = voice.users.filter((u) => u.isSharing);
-  const focused = streams.find((u) => u.identity === focus && u.screen);
+  const tiles: CallTile[] = [
+    ...streams.map((u) => ({ key: `s:${u.identity}`, kind: 'stream' as const, user: u })),
+    ...voice.users.map((u) => ({ key: `u:${u.identity}`, kind: 'user' as const, user: u })),
+  ];
+  const focused = tiles.find((t) => t.key === focus);
+  // Quem sai da call ou para de transmitir sai do destaque.
+  useEffect(() => {
+    if (focus && !focused) setFocus(null);
+  }, [focus, focused]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.fullscreenElement && setFocus(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  /** Clique numa transmissão ou pessoa: põe em destaque. Clicar de novo no destaque volta para a grade. */
+  const toggleFocus = (key: string) => setFocus((f) => (f === key ? null : key));
+  const renderTile = (t: CallTile, mode: 'grid' | 'strip') =>
+    t.kind === 'stream' ? (
+      <StreamTile
+        key={t.key}
+        user={t.user}
+        voice={voice}
+        compact={mode === 'strip'}
+        onFocus={() => toggleFocus(t.key)}
+        onMenu={(e) => openMenu(e, t.user, 'stream')}
+      />
+    ) : (
+      <UserTile
+        key={t.key}
+        user={t.user}
+        flags={voiceFlags[t.user.identity]}
+        deafened={t.user.isLocal ? voice.deafened : undefined}
+        compact={mode === 'strip'}
+        onFocus={() => toggleFocus(t.key)}
+        onMenu={(e) => openMenu(e, t.user, 'user')}
+      />
+    );
 
   return (
     <div className="voice-view">
@@ -499,45 +553,31 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
         {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
       </header>
       {focused ? (
-        <div className="stage" onContextMenu={(e) => openMenu(e, focused, 'stream')}>
-          <VideoTrack track={focused.screen!} contain />
-          {stageStats && <StreamStats track={focused.screen!} />}
-          <div className="stage-bar">
-            <span className="live">AO VIVO</span> {focused.name}
-            {!focused.isLocal && <StreamVolume identity={focused.identity} className="stage-volume" />}
-            <button className="link" onClick={() => setStageStats((v) => !v)}>{stageStats ? 'Esconder estatísticas' : 'Estatísticas'}</button>
-            <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
-          </div>
+        <div className="focus-layout">
+          {focused.kind === 'stream' && focused.user.screen ? (
+            <div className="stage" onContextMenu={(e) => openMenu(e, focused.user, 'stream')} onDoubleClick={(e) => (e.currentTarget.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}>
+              <VideoTrack track={focused.user.screen} contain />
+              {stageStats && <StreamStats track={focused.user.screen} />}
+              <div className="stage-bar">
+                <span className="live">AO VIVO</span> {focused.user.isLocal ? 'Sua transmissão' : focused.user.name}
+                {!focused.user.isLocal && <StreamVolume identity={focused.user.identity} className="stage-volume" />}
+                <button className="link" onClick={() => setStageStats((v) => !v)}>{stageStats ? 'Esconder estatísticas' : 'Estatísticas'}</button>
+                <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.stage')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
+                <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
+              </div>
+            </div>
+          ) : (
+            <div className="stage stage-tile">
+              {renderTile(focused, 'grid')}
+              <div className="stage-bar">
+                <button className="link" onClick={() => setFocus(null)}>Voltar para a grade</button>
+              </div>
+            </div>
+          )}
+          <div className="strip">{tiles.filter((t) => t !== focused).map((t) => renderTile(t, 'strip'))}</div>
         </div>
       ) : (
-        <div className="grid">
-          {streams.map((u) => (
-            <StreamTile key={`s-${u.identity}`} user={u} voice={voice} onFocus={() => setFocus(u.identity)} onMenu={(e) => openMenu(e, u, 'stream')} />
-          ))}
-          {voice.users.map((u) => (
-            <div key={u.identity} className={`tile ${u.speaking ? 'speaking' : ''}`} onContextMenu={(e) => openMenu(e, u, 'user')}>
-              {u.camera ? <VideoTrack track={u.camera} mirror={u.isLocal} /> : <div className="tile-avatar">{initials(u.name)}</div>}
-              <div className="tile-name">
-                {u.micMuted && <MicOff size={14} className="muted-icon" />}
-                {u.name}
-                {u.isSharing && <span className="live">AO VIVO</span>}
-              </div>
-              {!u.isLocal && (
-                <label className="tile-volume" title={`Volume de ${u.name}`}>
-                  <Volume2 size={14} />
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={settings.userVolumes[u.identity] ?? 100}
-                    onChange={(e) => updateSettings({ userVolumes: { ...settings.userVolumes, [u.identity]: +e.target.value } })}
-                  />
-                  <small>{settings.userVolumes[u.identity] ?? 100}%</small>
-                </label>
-              )}
-            </div>
-          ))}
-        </div>
+        <div className="grid">{tiles.map((t) => renderTile(t, 'grid'))}</div>
       )}
       <div className="floating-layer" aria-hidden>
         {voice.floating.map((f) => (
@@ -600,31 +640,93 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
   );
 }
 
-function StreamTile({ user, voice, onFocus, onMenu }: { user: VoiceUser; voice: Voice; onFocus: () => void; onMenu: (e: React.MouseEvent) => void }) {
+type CallTile = { key: string; kind: 'stream' | 'user'; user: VoiceUser };
+
+/** Clique no card põe em destaque, menos quando o clique foi num botão ou controle dentro dele. */
+const onTileClick = (fn: () => void) => (e: React.MouseEvent) => {
+  if ((e.target as HTMLElement).closest('button, input, label, .tile-volume, .stream-stats')) return;
+  fn();
+};
+
+function UserTile({ user, flags, deafened, compact, onFocus, onMenu }: {
+  user: VoiceUser;
+  flags?: VoiceFlags;
+  deafened?: boolean;
+  compact?: boolean;
+  onFocus: () => void;
+  onMenu: (e: React.MouseEvent) => void;
+}) {
+  const settings = useSettings();
+  const deaf = deafened ?? !!flags?.self_deaf;
+  return (
+    <div
+      className={`tile ${user.speaking ? 'speaking' : ''} ${compact ? 'compact' : ''}`}
+      onClick={onTileClick(onFocus)}
+      onContextMenu={onMenu}
+      title="Clique para destacar"
+    >
+      {user.camera ? <VideoTrack track={user.camera} mirror={user.isLocal} /> : <div className="tile-avatar">{initials(user.name)}</div>}
+      <div className="tile-name">
+        {deaf ? <HeadphoneOff size={14} className="muted-icon" /> : user.micMuted && <MicOff size={14} className="muted-icon" />}
+        <span className="tile-label">{user.name}</span>
+        {user.isSharing && <span className="live">AO VIVO</span>}
+      </div>
+      {!user.isLocal && !compact && (
+        <label className="tile-volume" title={`Volume de ${user.name}`}>
+          <Volume2 size={14} />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={settings.userVolumes[user.identity] ?? 100}
+            onChange={(e) => updateSettings({ userVolumes: { ...settings.userVolumes, [user.identity]: +e.target.value } })}
+          />
+          <small>{settings.userVolumes[user.identity] ?? 100}%</small>
+        </label>
+      )}
+    </div>
+  );
+}
+
+function StreamTile({ user, voice, compact, onFocus, onMenu }: {
+  user: VoiceUser;
+  voice: Voice;
+  compact?: boolean;
+  onFocus: () => void;
+  onMenu: (e: React.MouseEvent) => void;
+}) {
   const [stats, setStats] = useState(false);
   if (!user.watching || !user.screen) {
     return (
-      <div className="tile stream" onContextMenu={onMenu}>
+      <div className={`tile stream ${compact ? 'compact' : ''}`} onContextMenu={onMenu}>
         <div className="stream-cta">
           <span className="live">AO VIVO</span>
-          <p>{user.name} está transmitindo</p>
-          <button className="primary" onClick={() => voice.setWatch(user.identity, true)}>Assistir transmissão</button>
+          {!compact && <p>{user.name} está transmitindo</p>}
+          <button className="primary" onClick={() => (voice.setWatch(user.identity, true), compact && onFocus())}>{compact ? `Assistir ${user.name}` : 'Assistir transmissão'}</button>
         </div>
       </div>
     );
   }
   return (
-    <div className="tile stream" onDoubleClick={onFocus} onContextMenu={onMenu} title={user.isLocal ? undefined : 'Botão direito: volume da transmissão'}>
+    <div
+      className={`tile stream ${compact ? 'compact' : ''}`}
+      onClick={onTileClick(onFocus)}
+      onDoubleClick={(e) => (e.currentTarget.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}
+      onContextMenu={onMenu}
+      title={compact ? 'Clique para destacar' : 'Clique para destacar · botão direito: volume'}
+    >
       <VideoTrack track={user.screen} contain />
       {stats && <StreamStats track={user.screen} />}
       <div className="tile-name">
-        <span className="live">AO VIVO</span> {user.isLocal ? 'Sua transmissão' : user.name}
-        <span className="tile-actions">
-          <button className={`icon small ${stats ? 'active' : ''}`} title="Estatísticas da transmissão" onClick={() => setStats((v) => !v)}><Activity size={16} /></button>
-          <button className="icon small" title="Ampliar" onClick={onFocus}><Expand size={16} /></button>
-          <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
-          {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
-        </span>
+        <span className="live">AO VIVO</span> <span className="tile-label">{user.isLocal ? 'Sua transmissão' : user.name}</span>
+        {!compact && (
+          <span className="tile-actions">
+            <button className={`icon small ${stats ? 'active' : ''}`} title="Estatísticas da transmissão" onClick={() => setStats((v) => !v)}><Activity size={16} /></button>
+            <button className="icon small" title="Destacar" onClick={onFocus}><Expand size={16} /></button>
+            <button className="icon small" title="Tela cheia" onClick={(e) => (e.currentTarget.closest('.tile')?.querySelector('video') as HTMLVideoElement)?.requestFullscreen()}><Maximize size={16} /></button>
+            {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
+          </span>
+        )}
       </div>
     </div>
   );

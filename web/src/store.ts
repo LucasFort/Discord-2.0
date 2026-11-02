@@ -10,6 +10,7 @@ export type State = {
   guilds: Guild[];
   online: Record<string, true>;
   voice: Record<string, string>; // userId -> voice channelId
+  voiceFlags: Record<string, VoiceFlags>; // userId -> mutado, ensurdecido, transmitindo, câmera
   messages: Record<string, Message[]>; // channelId -> messages
   typing: Record<string, Record<string, number>>; // channelId -> userId -> expires at
 };
@@ -27,19 +28,27 @@ type Action =
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
   | { t: 'TYPING_SWEEP' };
 
-type VoiceState = { user_id: string; guild_id: string; channel_id: string | null };
+export type VoiceFlags = { self_mute?: boolean; self_deaf?: boolean; self_stream?: boolean; self_video?: boolean };
+type VoiceState = { user_id: string; guild_id: string; channel_id: string | null } & VoiceFlags;
 
-const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, messages: {}, typing: {} };
+const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
 }
 
+const flagsOf = (v: VoiceFlags): VoiceFlags => ({ self_mute: !!v.self_mute, self_deaf: !!v.self_deaf, self_stream: !!v.self_stream, self_video: !!v.self_video });
+
 function reducer(s: State, a: Action): State {
   switch (a.t) {
     case 'READY': {
       const voice: State['voice'] = {};
-      for (const v of a.d.voice_states) if (v.channel_id) voice[v.user_id] = v.channel_id;
+      const voiceFlags: State['voiceFlags'] = {};
+      for (const v of a.d.voice_states)
+        if (v.channel_id) {
+          voice[v.user_id] = v.channel_id;
+          voiceFlags[v.user_id] = flagsOf(v);
+        }
       return {
         ...initial,
         ready: true,
@@ -48,6 +57,7 @@ function reducer(s: State, a: Action): State {
         guilds: a.d.guilds,
         online: { ...Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])), [a.d.user.id]: true },
         voice,
+        voiceFlags,
         messages: s.messages,
       };
     }
@@ -106,9 +116,15 @@ function reducer(s: State, a: Action): State {
     }
     case 'VOICE_STATE_UPDATE': {
       const voice = { ...s.voice };
-      if (a.d.channel_id) voice[a.d.user_id] = a.d.channel_id;
-      else delete voice[a.d.user_id];
-      return { ...s, voice };
+      const voiceFlags = { ...s.voiceFlags };
+      if (a.d.channel_id) {
+        voice[a.d.user_id] = a.d.channel_id;
+        voiceFlags[a.d.user_id] = flagsOf(a.d);
+      } else {
+        delete voice[a.d.user_id];
+        delete voiceFlags[a.d.user_id];
+      }
+      return { ...s, voice, voiceFlags };
     }
     case 'TYPING_START': {
       if (a.d.user_id === s.user?.id) return s;

@@ -299,3 +299,25 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .update-bar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-radius: 12px; background: var(--bg-1); color: var(--text-strong); border: 1px solid var(--accent); box-shadow: 0 12px 32px rgba(0, 0, 0, .5); font-size: 14px; max-width: calc(100vw - 32px); flex-wrap: wrap; animation: toast-in .2s ease-out; }
 .update-bar button { padding: 6px 12px; }
+
+.voice-member { padding-right: 10px; }
+.voice-member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-member-icons { display: flex; align-items: center; gap: 6px; flex: none; color: var(--text-muted); }
+.voice-member-icons .off { color: var(--danger); }
+
+/* Destaque (clicar numa transmissão ou pessoa) com a faixa dos outros embaixo, como no Discord */
+.tile { cursor: pointer; }
+.tile-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.focus-layout .stage { margin-bottom: 0; }
+.stage-tile { display: grid; background: transparent; }
+.stage-tile > .tile { width: 100%; height: 100%; grid-column: auto; cursor: zoom-out; }
+.stage-tile .tile-avatar { width: 128px; height: 128px; font-size: 44px; }
+.stage-tile .stage-bar { top: 12px; right: 12px; left: auto; }
+.strip { flex: none; display: flex; gap: 10px; padding: 12px; overflow-x: auto; justify-content: center; }
+.strip .tile { flex: none; width: 200px; height: 112px; border-radius: 12px; grid-column: auto; }
+.strip .tile-avatar { width: 48px; height: 48px; font-size: 18px; }
+.strip .tile-name { font-size: 12px; left: 8px; bottom: 6px; right: 8px; }
+.strip .stream-cta button { padding: 6px 10px; font-size: 12px; }
+.strip .tile:hover { border-color: var(--accent); }
+@media (max-width: 700px) { .strip { justify-content: flex-start; } .strip .tile { width: 150px; height: 86px; } }
