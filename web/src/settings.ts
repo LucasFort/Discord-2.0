@@ -15,6 +15,7 @@ export type Settings = {
   strongNoiseSuppression: boolean; // RNNoise (tira chiado e barulho de fundo)
   maxNoiseSuppression: boolean; // RNNoise duas vezes (corta até teclado e gente falando longe)
   echoGate: boolean; // segura o microfone enquanto os outros falam e o seu som é só eco
+  echoStrength: 'normal' | 'strong' | 'max'; // quão rígido o microfone fica enquanto toca som da call (voz, vídeo, transmissão)
   inputMode: 'voice' | 'ptt';
   pttKey: string; // KeyboardEvent.code, ex.: 'KeyV'
   pttReleaseDelay: number; // ms
@@ -52,6 +53,7 @@ const DEFAULTS: Settings = {
   strongNoiseSuppression: true,
   maxNoiseSuppression: true,
   echoGate: true,
+  echoStrength: 'strong',
   inputMode: 'voice',
   pttKey: '',
   pttReleaseDelay: 200,

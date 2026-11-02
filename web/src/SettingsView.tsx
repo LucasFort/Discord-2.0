@@ -275,12 +275,37 @@ function VoiceSettings() {
         </small>
       </div>
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
-      <Toggle
-        label="Supressão de eco extra"
-        hint="Enquanto outra pessoa fala, o microfone só abre com a sua voz de verdade. Tira o eco que sobra quando alguém usa caixa de som."
-        checked={s.echoGate}
-        onChange={(v) => updateSettings({ echoGate: v })}
-      />
+      <div className="field">
+        <span>Proteção contra retorno</span>
+        <div className="options">
+          {(
+            [
+              ['off', 'Desligada'],
+              ['normal', 'Normal'],
+              ['strong', 'Forte'],
+              ['max', 'Máxima'],
+            ] as const
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              className={`option ${(v === 'off' ? !s.echoGate : s.echoGate && s.echoStrength === v) ? 'selected' : ''}`}
+              onClick={() => updateSettings(v === 'off' ? { echoGate: false } : { echoGate: true, echoStrength: v })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <small className="muted">
+          {!s.echoGate
+            ? 'Sem proteção: use se estiver de fone.'
+            : s.echoStrength === 'max'
+              ? 'Para caixa de som alta ou vídeo/transmissão no volume alto. Enquanto toca som da call, o microfone só abre quando você fala no seu volume normal.'
+              : s.echoStrength === 'strong'
+                ? 'Enquanto toca voz, vídeo ou transmissão da call, o som que volta pelo microfone não é enviado. Falar por cima continua passando.'
+                : 'Proteção leve: só segura o eco bem baixo.'}
+          {' '}O melhor de tudo continua sendo usar fone.
+        </small>
+      </div>
       <Toggle label="Controle automático de ganho" hint="Ajusta o volume do microfone sozinho." checked={s.autoGainControl} onChange={(v) => updateSettings({ autoGainControl: v })} />
 
       <h3>Qualidade da voz</h3>

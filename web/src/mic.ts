@@ -240,7 +240,10 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.noiseFloor = raw < this.noiseFloor ? raw : echoRisk ? this.noiseFloor : Math.min(this.noiseFloor + 0.02, -20);
     // Com risco de eco a voz precisa chegar perto do volume normal da sua fala; o eco que sobra
     // depois do cancelamento é bem mais baixo e fica de fora. Falar por cima dos outros continua passando.
-    const speaking = raw > this.noiseFloor + 10 && raw > -95 && (!echoRisk || raw > this.speechLevel - 9);
+    // Quanto mais forte a proteção, mais perto do volume normal da sua fala o som precisa chegar
+    // enquanto toca som da call (voz dos outros, vídeo, transmissão). O retorno pelo microfone fica de fora.
+    const margin = s.echoStrength === 'max' ? 2 : s.echoStrength === 'normal' ? 9 : 5;
+    const speaking = raw > this.noiseFloor + 10 && raw > -95 && (!echoRisk || raw > this.speechLevel - margin);
     if (speaking) {
       this.lastSpeech = now;
       this.speechLevel += (raw - this.speechLevel) * 0.03;
