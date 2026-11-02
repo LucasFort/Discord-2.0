@@ -321,3 +321,34 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 .strip .stream-cta button { padding: 6px 10px; font-size: 12px; }
 .strip .tile:hover { border-color: var(--accent); }
 @media (max-width: 700px) { .strip { justify-content: flex-start; } .strip .tile { width: 150px; height: 86px; } }
+
+/* Pessoas na call (volumes) e moderação do dono do servidor */
+.topbar .topbar-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.topbar .topbar-end small { font-size: 12px; }
+.people-panel { position: absolute; top: 64px; right: 12px; bottom: 96px; z-index: 20; width: 320px; max-width: calc(100% - 24px); display: flex; flex-direction: column; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); overflow: hidden; }
+.people-panel > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line); color: var(--text-strong); font-size: 14px; }
+.people-all { padding: 6px 10px 0; font-size: 13px; }
+.people-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.people-row { padding: 8px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
+.people-row:hover { background: var(--bg-2); }
+.people-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tile-avatar.small { width: 28px; height: 28px; font-size: 12px; box-shadow: none; flex: none; }
+.people-row.speaking .tile-avatar.small { box-shadow: 0 0 0 2px var(--ok); }
+.people-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); font-size: 14px; }
+.people-volume { display: flex; align-items: center; gap: 6px; padding-left: 36px; }
+.people-volume input { flex: 1; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+.people-volume small { width: 36px; text-align: right; color: var(--text-muted); font-size: 12px; }
+.people-stream { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-muted); }
+.people-stream > span { padding-left: 36px; }
+.people-mod { display: flex; align-items: center; gap: 4px; padding-left: 36px; }
+.people-mod select { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
+.voice-member-icons .server, .tile-name .server { color: white; background: var(--danger); border-radius: 4px; padding: 1px; }
+.call-menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.call-menu-title svg { vertical-align: -1px; }
+.call-menu button.call-menu-sub { padding-left: 28px; font-size: 13px; }
+.call-menu button.danger { color: var(--danger); }
+.call-menu button.danger:hover { background: var(--danger); color: white; }
+.call-menu button.checked { color: var(--danger); }
+@media (min-width: 900px) {
+  .voice-view.with-people .grid, .voice-view.with-people .focus-layout { margin-right: 332px; }
+}

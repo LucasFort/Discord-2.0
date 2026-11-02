@@ -2,11 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
-  PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Video, VideoOff, Volume2, VolumeX, X,
+  PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
 } from 'lucide-react';
 import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
-import { useToasts } from './toast';
+import { toast, useToasts } from './toast';
 import { useUpdateAvailable } from './update';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
@@ -97,6 +97,31 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
+  const [sideMenu, setSideMenu] = useState<CallMenuState | null>(null);
+
+  // Silenciado/ensurdecido pelo dono do servidor: o microfone e o som seguem o que o servidor manda.
+  const myFlags = state.user ? state.voiceFlags[state.user.id] : undefined;
+  useEffect(() => {
+    if (voice.channelId) voice.setServerState(!!myFlags?.server_mute, !!myFlags?.server_deaf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.channelId, myFlags?.server_mute, myFlags?.server_deaf]);
+
+  // O dono do servidor desconectou ou moveu esta pessoa.
+  useEffect(() => {
+    const a = state.voiceAction;
+    if (!a) return;
+    if (a.action === 'disconnect') {
+      if (voice.channelId) void voice.leave();
+      toast(`${a.by} desconectou você da call`, 'leave');
+    } else if (a.action === 'move' && a.channel_id) {
+      const ch = state.guilds.flatMap((g) => g.channels).find((c) => c.id === a.channel_id);
+      void voice.join(a.channel_id);
+      setView('voice');
+      toast(`${a.by} moveu você para ${ch?.name ?? 'outro canal'}`, 'join');
+    } else if (a.action === 'mute') toast(`${a.by} silenciou você no servidor`);
+    else if (a.action === 'deafen') toast(`${a.by} ensurdeceu você no servidor`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.voiceAction?.n]);
   const [sounds, setSounds] = useState(soundsEnabled);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleSounds = () => {
@@ -166,6 +191,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
   };
 
   const voiceChannel = guild?.channels.find((c) => c.id === voice.channelId);
+  const voiceGuild = state.guilds.find((g) => g.channels.some((c) => c.id === voice.channelId));
 
   return (
     <div className="app">
@@ -188,6 +214,16 @@ function Main({ onLogout }: { onLogout: () => void }) {
             me={state.user}
             activeId={view === 'voice' ? voice.channelId : textChannel?.id}
             onOpen={openChannel}
+            onMemberMenu={(e, m) => {
+              if (m.id === state.user?.id) return;
+              e.preventDefault();
+              setSideMenu({
+                x: e.clientX,
+                y: e.clientY,
+                kind: 'user',
+                user: { identity: m.id, name: m.display_name, isLocal: false, speaking: false, micMuted: false, isSharing: false, watching: false },
+              });
+            }}
             voiceSpeaking={new Set(voice.users.filter((u) => u.speaking).map((u) => u.identity))}
           />
         ) : (
@@ -200,11 +236,11 @@ function Main({ onLogout }: { onLogout: () => void }) {
             <strong>{state.user.display_name}</strong>
             <small>@{state.user.username}</small>
           </div>
-          <button className={`icon ${voice.muted ? 'danger' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
-            {voice.muted ? <MicOff size={18} /> : <Mic size={18} />}
+          <button className={`icon ${voice.muted || voice.serverMuted ? 'danger' : ''}`} title={voice.serverMuted ? 'Silenciado pelo dono do servidor' : voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+            {voice.muted || voice.serverMuted ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
-          <button className={`icon ${voice.deafened ? 'danger' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
-            {voice.deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+          <button className={`icon ${voice.deafened || voice.serverDeafened ? 'danger' : ''}`} title={voice.serverDeafened ? 'Ensurdecido pelo dono do servidor' : voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+            {voice.deafened || voice.serverDeafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
           </button>
           <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
             {sounds ? <Bell size={18} /> : <BellOff size={18} />}
@@ -216,7 +252,14 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
       <main className="content">
         {view === 'voice' && voice.channelId ? (
-          <VoiceView voice={voice} channelName={voiceChannel?.name ?? 'Voz'} voiceFlags={state.voiceFlags} onSettings={() => setSettingsOpen(true)} />
+          <VoiceView
+            voice={voice}
+            channelName={voiceChannel?.name ?? 'Voz'}
+            voiceFlags={state.voiceFlags}
+            guild={voiceGuild}
+            isOwner={!!voiceGuild && voiceGuild.owner_id === state.user.id}
+            onSettings={() => setSettingsOpen(true)}
+          />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
         ) : (
@@ -225,6 +268,17 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </main>
 
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
+      {sideMenu && guild && (
+        <CallMenu
+          menu={sideMenu}
+          voice={voice}
+          guild={guild}
+          isOwner={guild.owner_id === state.user.id}
+          flags={state.voiceFlags[sideMenu.user.identity]}
+          onClose={() => setSideMenu(null)}
+          onFullscreen={() => {}}
+        />
+      )}
       <Toasts />
       <UpdateWatcher voiceChannelId={voice.channelId} sharing={voice.sharing} />
       <AskHost />
@@ -240,9 +294,10 @@ function ChannelList(props: {
   me: User;
   activeId?: string | null;
   onOpen: (c: Channel) => void;
+  onMemberMenu?: (e: React.MouseEvent, m: User) => void;
   voiceSpeaking?: Set<string>;
 }) {
-  const { guild, state, me, activeId, onOpen, voiceSpeaking } = props;
+  const { guild, state, me, activeId, onOpen, onMemberMenu, voiceSpeaking } = props;
   const isOwner = guild.owner_id === me.id;
   const add = async (type: 'text' | 'voice') => {
     const name = await ask(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz', { okText: 'Criar' });
@@ -273,12 +328,17 @@ function ChannelList(props: {
                 .map((m) => {
                   const f = state.voiceFlags[m.id] ?? {};
                   return (
-                  <div key={m.id} className={`voice-member ${voiceSpeaking?.has(m.id) ? 'speaking' : ''}`}>
+                  <div
+                    key={m.id}
+                    className={`voice-member ${voiceSpeaking?.has(m.id) ? 'speaking' : ''}`}
+                    onContextMenu={(e) => onMemberMenu?.(e, m)}
+                    title={m.id === me.id ? undefined : 'Botão direito: volume' + (isOwner ? ' e moderação' : '')}
+                  >
                     <Avatar user={m} size={20} /> <span className="voice-member-name">{m.display_name}</span>
                     <span className="voice-member-icons">
                       {f.self_stream && <span className="live small">AO VIVO</span>}
                       {f.self_video && <Video size={14} aria-label="Câmera ligada" />}
-                      {f.self_deaf ? <HeadphoneOff size={14} className="off" aria-label="Ensurdecido" /> : f.self_mute && <MicOff size={14} className="off" aria-label="Mutado" />}
+                      <VoiceStatus flags={f} />
                     </span>
                   </div>
                   );
@@ -494,8 +554,16 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   );
 }
 
-function VoiceView({ voice, channelName, voiceFlags, onSettings }: { voice: Voice; channelName: string; voiceFlags: State['voiceFlags']; onSettings: () => void }) {
+function VoiceView({ voice, channelName, voiceFlags, guild, isOwner, onSettings }: {
+  voice: Voice;
+  channelName: string;
+  voiceFlags: State['voiceFlags'];
+  guild?: Guild;
+  isOwner: boolean;
+  onSettings: () => void;
+}) {
   const [shareOpen, setShareOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [stageStats, setStageStats] = useState(false);
   // Em destaque: 's:<id>' para a transmissão de alguém, 'u:<id>' para a pessoa (câmera ou avatar).
@@ -547,11 +615,17 @@ function VoiceView({ voice, channelName, voiceFlags, onSettings }: { voice: Voic
     );
 
   return (
-    <div className="voice-view">
+    <div className={`voice-view ${peopleOpen ? 'with-people' : ''}`}>
       <header className="topbar">
         <span className="hash"><Volume2 size={20} /></span> {channelName}
         {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
+        <button className={`icon topbar-end ${peopleOpen ? 'active' : ''}`} title="Pessoas na call e volumes" onClick={() => setPeopleOpen((o) => !o)}>
+          <Users size={20} /> <small>{voice.users.length}</small>
+        </button>
       </header>
+      {peopleOpen && (
+        <PeoplePanel voice={voice} voiceFlags={voiceFlags} guild={guild} isOwner={isOwner} onClose={() => setPeopleOpen(false)} />
+      )}
       {focused ? (
         <div className="focus-layout">
           {focused.kind === 'stream' && focused.user.screen ? (
@@ -600,11 +674,11 @@ function VoiceView({ voice, channelName, voiceFlags, onSettings }: { voice: Voic
             </div>
           )}
         </div>
-        <button className={`round ${voice.muted ? 'off' : ''}`} title={voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
-          {voice.muted ? <MicOff size={22} /> : <Mic size={22} />}
+        <button className={`round ${voice.muted || voice.serverMuted ? 'off' : ''}`} title={voice.serverMuted ? 'Silenciado pelo dono do servidor' : voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
+          {voice.muted || voice.serverMuted ? <MicOff size={22} /> : <Mic size={22} />}
         </button>
-        <button className={`round ${voice.deafened ? 'off' : ''}`} title={voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
-          {voice.deafened ? <HeadphoneOff size={22} /> : <Headphones size={22} />}
+        <button className={`round ${voice.deafened || voice.serverDeafened ? 'off' : ''}`} title={voice.serverDeafened ? 'Ensurdecido pelo dono do servidor' : voice.deafened ? 'Ouvir' : 'Ensurdecer'} onClick={voice.toggleDeafen}>
+          {voice.deafened || voice.serverDeafened ? <HeadphoneOff size={22} /> : <Headphones size={22} />}
         </button>
         <button className={`round ${voice.camera ? 'on' : ''}`} title={voice.camera ? 'Desligar câmera' : 'Ligar câmera'} onClick={voice.toggleCamera}>
           {voice.camera ? <Video size={22} /> : <VideoOff size={22} />}
@@ -620,7 +694,17 @@ function VoiceView({ voice, channelName, voiceFlags, onSettings }: { voice: Voic
         <button className="round" title="Configurações de voz" onClick={onSettings}><SettingsIcon size={22} /></button>
         <button className="round danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={22} /></button>
       </div>
-      {menu && <CallMenu menu={menu} voice={voice} onClose={() => setMenu(null)} onFullscreen={() => setFocus(menu.user.identity)} />}
+      {menu && (
+        <CallMenu
+          menu={menu}
+          voice={voice}
+          guild={guild}
+          isOwner={isOwner}
+          flags={voiceFlags[menu.user.identity]}
+          onClose={() => setMenu(null)}
+          onFullscreen={() => setFocus(`s:${menu.user.identity}`)}
+        />
+      )}
       {shareOpen && (
         <ShareDialog
           live={voice.sharing}
@@ -667,7 +751,13 @@ function UserTile({ user, flags, deafened, compact, onFocus, onMenu }: {
     >
       {user.camera ? <VideoTrack track={user.camera} mirror={user.isLocal} /> : <div className="tile-avatar">{initials(user.name)}</div>}
       <div className="tile-name">
-        {deaf ? <HeadphoneOff size={14} className="muted-icon" /> : user.micMuted && <MicOff size={14} className="muted-icon" />}
+        {flags?.server_deaf || flags?.server_mute ? (
+          <VoiceStatus flags={flags} />
+        ) : deaf ? (
+          <HeadphoneOff size={14} className="muted-icon" />
+        ) : (
+          user.micMuted && <MicOff size={14} className="muted-icon" />
+        )}
         <span className="tile-label">{user.name}</span>
         {user.isSharing && <span className="live">AO VIVO</span>}
       </div>
@@ -735,7 +825,15 @@ function StreamTile({ user, voice, compact, onFocus, onMenu }: {
 type CallMenuState = { x: number; y: number; user: VoiceUser; kind: 'stream' | 'user' };
 
 /** Menu do botão direito numa transmissão ou numa pessoa da call: volume, silenciar, parar de assistir. */
-function CallMenu({ menu, voice, onClose, onFullscreen }: { menu: CallMenuState; voice: Voice; onClose: () => void; onFullscreen: () => void }) {
+function CallMenu({ menu, voice, guild, isOwner, flags, onClose, onFullscreen }: {
+  menu: CallMenuState;
+  voice: Voice;
+  guild?: Guild;
+  isOwner?: boolean;
+  flags?: VoiceFlags;
+  onClose: () => void;
+  onFullscreen: () => void;
+}) {
   const settings = useSettings();
   const ref = useRef<HTMLDivElement>(null);
   const { user, kind } = menu;
@@ -795,7 +893,140 @@ function CallMenu({ menu, voice, onClose, onFullscreen }: { menu: CallMenuState;
           <button onClick={() => (voice.setWatch(user.identity, false), onClose())}><X size={16} /> Parar de assistir</button>
         </>
       )}
+      {kind === 'user' && isOwner && guild && <ModActions guild={guild} userId={user.identity} flags={flags} onDone={onClose} />}
     </div>
+  );
+}
+
+/** Pede ao servidor uma ação de moderação de voz (só funciona para o dono do servidor). */
+function moderate(guildId: string, userId: string, action: 'mute' | 'unmute' | 'deafen' | 'undeafen' | 'disconnect' | 'move', channelId?: string) {
+  return api('POST', `/guilds/${guildId}/members/${userId}/voice`, { action, channel_id: channelId }).catch((e) => toast(e.message));
+}
+
+/** Ferramentas do dono do servidor no menu do botão direito: silenciar, ensurdecer, mover e desconectar. */
+function ModActions({ guild, userId, flags, onDone }: { guild: Guild; userId: string; flags?: VoiceFlags; onDone: () => void }) {
+  const [moveOpen, setMoveOpen] = useState(false);
+  const inVoice = !!flags;
+  return (
+    <>
+      <div className="call-menu-sep" />
+      <div className="call-menu-title"><ShieldAlert size={12} /> Dono do servidor</div>
+      <button className={flags?.server_mute ? 'checked' : ''} onClick={() => (moderate(guild.id, userId, flags?.server_mute ? 'unmute' : 'mute'), onDone())}>
+        <MicOff size={16} /> {flags?.server_mute ? 'Tirar silêncio do servidor' : 'Silenciar no servidor'}
+      </button>
+      <button className={flags?.server_deaf ? 'checked' : ''} onClick={() => (moderate(guild.id, userId, flags?.server_deaf ? 'undeafen' : 'deafen'), onDone())}>
+        <HeadphoneOff size={16} /> {flags?.server_deaf ? 'Tirar ensurdecer do servidor' : 'Ensurdecer no servidor'}
+      </button>
+      {inVoice && (
+        <>
+          <button onClick={() => setMoveOpen((o) => !o)}><ArrowRightLeft size={16} /> Mover para…</button>
+          {moveOpen &&
+            guild.channels
+              .filter((c) => c.type === 'voice')
+              .map((c) => (
+                <button key={c.id} className="call-menu-sub" onClick={() => (moderate(guild.id, userId, 'move', c.id), onDone())}>
+                  <Volume2 size={14} /> {c.name}
+                </button>
+              ))}
+          <button className="danger" onClick={() => (moderate(guild.id, userId, 'disconnect'), onDone())}><PhoneOff size={16} /> Desconectar</button>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Ícones de mutado/ensurdecido. Os do servidor (dono silenciou) aparecem em vermelho forte. */
+function VoiceStatus({ flags }: { flags: VoiceFlags }) {
+  if (flags.server_deaf) return <HeadphoneOff size={14} className="off server" aria-label="Ensurdecido pelo servidor"><title>Ensurdecido pelo dono do servidor</title></HeadphoneOff>;
+  if (flags.self_deaf) return <HeadphoneOff size={14} className="off" aria-label="Ensurdecido" />;
+  if (flags.server_mute) return <MicOff size={14} className="off server" aria-label="Silenciado pelo servidor"><title>Silenciado pelo dono do servidor</title></MicOff>;
+  if (flags.self_mute) return <MicOff size={14} className="off" aria-label="Mutado" />;
+  return null;
+}
+
+/** Painel "Pessoas na call": volume de cada um (voz e transmissão) e, para o dono, a moderação. */
+function PeoplePanel({ voice, voiceFlags, guild, isOwner, onClose }: {
+  voice: Voice;
+  voiceFlags: State['voiceFlags'];
+  guild?: Guild;
+  isOwner: boolean;
+  onClose: () => void;
+}) {
+  const settings = useSettings();
+  const setVol = (id: string, v: number) => updateSettings({ userVolumes: { ...settings.userVolumes, [id]: v } });
+  const others = voice.users.filter((u) => !u.isLocal);
+  return (
+    <aside className="people-panel">
+      <header>
+        <strong>Pessoas na call · {voice.users.length}</strong>
+        <button className="icon small" title="Fechar" onClick={onClose}><X size={16} /></button>
+      </header>
+      {others.length > 1 && (
+        <div className="people-all">
+          <button className="link" onClick={() => updateSettings({ userVolumes: { ...settings.userVolumes, ...Object.fromEntries(others.map((u) => [u.identity, 100])) } })}>
+            Voltar todo mundo para 100%
+          </button>
+        </div>
+      )}
+      <div className="people-list">
+        {voice.users.map((u) => {
+          const f = voiceFlags[u.identity] ?? {};
+          const vol = settings.userVolumes[u.identity] ?? 100;
+          return (
+            <div key={u.identity} className={`people-row ${u.speaking ? 'speaking' : ''}`}>
+              <div className="people-head">
+                <div className="tile-avatar small">{initials(u.name)}</div>
+                <span className="people-name">{u.isLocal ? `${u.name} (você)` : u.name}</span>
+                <span className="voice-member-icons">
+                  {u.isSharing && <span className="live small">AO VIVO</span>}
+                  <VoiceStatus flags={u.isLocal ? { ...f, self_mute: voice.muted, self_deaf: voice.deafened } : f} />
+                </span>
+              </div>
+              {!u.isLocal && (
+                <>
+                  <div className="people-volume">
+                    <button className="icon small" title={vol === 0 ? 'Ativar som' : 'Silenciar para mim'} onClick={() => setVol(u.identity, vol === 0 ? 100 : 0)}>
+                      {vol === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                    </button>
+                    <input type="range" min={0} max={100} value={vol} onChange={(e) => setVol(u.identity, +e.target.value)} aria-label={`Volume de ${u.name}`} />
+                    <small>{vol}%</small>
+                  </div>
+                  {u.isSharing && (
+                    <div className="people-stream">
+                      <span>Transmissão</span>
+                      <StreamVolume identity={u.identity} className="people-volume" />
+                    </div>
+                  )}
+                  {isOwner && guild && (
+                    <div className="people-mod">
+                      <button className={`icon small ${f.server_mute ? 'danger' : ''}`} title={f.server_mute ? 'Tirar silêncio do servidor' : 'Silenciar no servidor'} onClick={() => moderate(guild.id, u.identity, f.server_mute ? 'unmute' : 'mute')}>
+                        <MicOff size={14} />
+                      </button>
+                      <button className={`icon small ${f.server_deaf ? 'danger' : ''}`} title={f.server_deaf ? 'Tirar ensurdecer do servidor' : 'Ensurdecer no servidor'} onClick={() => moderate(guild.id, u.identity, f.server_deaf ? 'undeafen' : 'deafen')}>
+                        <HeadphoneOff size={14} />
+                      </button>
+                      <select
+                        value=""
+                        title="Mover para outro canal de voz"
+                        onChange={(e) => e.target.value && moderate(guild.id, u.identity, 'move', e.target.value)}
+                      >
+                        <option value="">Mover para…</option>
+                        {guild.channels.filter((c) => c.type === 'voice' && c.id !== voice.channelId).map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                      <button className="icon small danger" title="Desconectar da call" onClick={() => moderate(guild.id, u.identity, 'disconnect')}>
+                        <PhoneOff size={14} />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 
