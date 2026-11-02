@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { comboFromEvent, comboToAccelerator, getSettings, onSettings } from './settings';
 
 /** Ponte do app de computador (desktop/preload-main.cjs). Não existe no navegador. */
@@ -7,6 +7,26 @@ type DesktopBridge = {
   onShortcut: (cb: (name: 'mute' | 'deafen') => void) => () => void;
 };
 const desktop = (window as unknown as { nexoDesktop?: DesktopBridge }).nexoDesktop;
+
+/**
+ * Se cada atalho virou global (funciona com o jogo em foco). null = navegador (nunca é global).
+ * false no app = outro programa já usa a combinação (o Discord usa Ctrl+Shift+M e Ctrl+Shift+D).
+ */
+export type ShortcutStatus = { mute: boolean; deafen: boolean } | null;
+let status: ShortcutStatus = desktop ? { mute: false, deafen: false } : null;
+const statusListeners = new Set<(s: ShortcutStatus) => void>();
+const setStatus = (s: ShortcutStatus) => {
+  status = s;
+  statusListeners.forEach((l) => l(s));
+};
+export function useShortcutStatus() {
+  const [s, set] = useState(status);
+  useEffect(() => {
+    statusListeners.add(set);
+    return () => void statusListeners.delete(set);
+  }, []);
+  return s;
+}
 
 /**
  * Atalhos de mutar/desmutar e ensurdecer (como os do Discord).
@@ -25,8 +45,14 @@ export function useVoiceShortcuts(actions: { mute: () => void; deafen: () => voi
       const s = getSettings();
       desktop
         .setShortcuts({ mute: comboToAccelerator(s.muteKey), deafen: comboToAccelerator(s.deafenKey) })
-        .then((r) => (global = r))
-        .catch(() => (global = { mute: false, deafen: false }));
+        .then((r) => {
+          global = r;
+          setStatus(r);
+        })
+        .catch(() => {
+          global = { mute: false, deafen: false };
+          setStatus(global);
+        });
     };
     register();
     let prev = getSettings();

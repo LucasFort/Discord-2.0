@@ -42,10 +42,13 @@ const dB = (rms: number) => Math.max(-100, Math.min(0, 20 * Math.log10(rms || 1e
  * funciona tanto em microfone alto quanto em microfone muito baixo.
  */
 /** Filtro de teclado e mouse: quanto o som precisa parecer voz para abrir o microfone. */
-const KEY_FILTER: Record<string, { share: number; flat: number; ticks: number; hold: number } | null> = {
+const KEY_FILTER: Record<string, { share: number; flat: number; ticks: number; bridge: number; hold: number } | null> = {
   off: null,
-  normal: { share: 0.58, flat: 0.33, ticks: 3, hold: 330 },
-  strong: { share: 0.6, flat: 0.3, ticks: 3, hold: 280 },
+  // bridge: por quanto tempo depois da última voz qualquer som alto ainda segura o microfone aberto
+  // (cobre "s", "f", "t", respiração e pausas curtas no meio da frase, sem cortar a voz).
+  // hold: quanto tempo fica aberto depois do último som, para o fim das palavras sair inteiro.
+  normal: { share: 0.58, flat: 0.33, ticks: 3, bridge: 700, hold: 350 },
+  strong: { share: 0.6, flat: 0.3, ticks: 3, bridge: 450, hold: 300 },
 };
 
 export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
@@ -305,16 +308,17 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
         voiced = sp.share > f.share && sp.flat < f.flat;
       }
       this.openTicks = voiced ? this.openTicks + 1 : 0;
-      const wasOpen = now - this.lastVoiced < (f?.hold ?? 400);
+      const bridge = f?.bridge ?? Infinity;
+      const wasOpen = now - this.lastVoiced < bridge;
       // Para continuar aberto também precisa de voz em 2 ticks seguidos: uma tecla isolada que por
       // acaso pareça voz não emenda o portão aberto.
       if (voiced && this.openTicks >= (f ? (wasOpen ? 2 : f.ticks) : 1)) this.lastVoiced = now;
-      // Com o portão aberto, som alto sem cara de voz (o "s", o "f", fim de palavra) também segura,
-      // mas só por pouco tempo: um "s" dura menos de 150 ms, uma sequência de teclas dura mais.
-      if (loud && wasOpen && now - this.lastVoiced < 150) this.lastLoud = now;
+      // Com o portão aberto, qualquer som alto segura enquanto a voz foi recente (a frase sai inteira,
+      // sem cortes). Teclas digitadas depois que você para de falar só passam até o "bridge" acabar.
+      if (loud && now - this.lastVoiced < bridge) this.lastLoud = now;
       open = now - Math.max(this.lastLoud, this.lastVoiced) < (f?.hold ?? 400);
     }
-    if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.005 : 0.05);
+    if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.005 : 0.08);
     this.open = open;
   }
 

@@ -352,3 +352,4 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 @media (min-width: 900px) {
   .voice-view.with-people .grid, .voice-view.with-people .focus-layout { margin-right: 332px; }
 }
+.ok-text { color: var(--ok); font-size: 12px; }
