@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, MonitorUp, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
 import { MicProcessor, newAudioContext } from './mic';
+import { useShortcutStatus } from './shortcuts';
 import { comboFromEvent, comboName, keyName, micConstraints, resetVoiceSettings, updateSettings, useSettings, type Settings } from './settings';
 import { activeMic, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, type ShareCodec, type ShareResolution } from './voice';
 import { setSoundsEnabled, soundsEnabled, playSound, SOUND_LABELS, type SoundName } from './sounds';
@@ -167,6 +168,7 @@ function Meter({ source, s }: { source: () => MicProcessor | null; s: Settings }
 
 function VoiceSettings() {
   const s = useSettings();
+  const shortcutStatus = useShortcutStatus();
   const [testing, setTesting] = useState(false);
   const [loopback, setLoopback] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -245,13 +247,13 @@ function VoiceSettings() {
 
       <h3>Atalhos</h3>
       <p className="muted">
-        {(window as unknown as { nexoDesktop?: unknown }).nexoDesktop
-          ? 'Funcionam em qualquer lugar, até com o jogo em foco.'
-          : 'No navegador funcionam com a aba do Nexo em foco. No app de computador funcionam até com o jogo aberto.'}
+        {shortcutStatus
+          ? 'No app de computador os atalhos funcionam em qualquer lugar, até com o jogo em foco.'
+          : 'No navegador os atalhos só funcionam com a aba do Nexo em foco. Para usar com o jogo aberto, use o app de computador (versão 0.1.2 ou mais nova).'}
       </p>
       <div className="field-row">
-        <Keybind label="Mutar / desmutar" value={s.muteKey} onChange={(v) => updateSettings({ muteKey: v })} />
-        <Keybind label="Ensurdecer / desensurdecer" value={s.deafenKey} onChange={(v) => updateSettings({ deafenKey: v })} />
+        <Keybind label="Mutar / desmutar" value={s.muteKey} global={shortcutStatus?.mute} onChange={(v) => updateSettings({ muteKey: v })} />
+        <Keybind label="Ensurdecer / desensurdecer" value={s.deafenKey} global={shortcutStatus?.deafen} onChange={(v) => updateSettings({ deafenKey: v })} />
       </div>
 
       <h3>Processamento de voz</h3>
@@ -294,8 +296,8 @@ function VoiceSettings() {
           {s.keyboardFilter === 'off'
             ? 'O microfone abre com qualquer som alto.'
             : s.keyboardFilter === 'strong'
-              ? 'O microfone só abre com a sua voz: digitar, clicar, bater na mesa e mexer no mouse não passam, nem logo depois de você falar.'
-              : 'Ignora a maior parte das teclas e cliques. Use se o Forte cortar o começo das suas frases.'}
+              ? 'Mais rígido: teclas logo depois de você falar são cortadas mais rápido. Use se ainda passar barulho.'
+              : 'O microfone só abre com a sua voz: digitar, clicar e mexer no mouse sozinhos não passam, e a sua fala sai inteira, sem cortes.'}
           {' '}Teste em "Vamos verificar": a barra só fica verde quando você fala.
         </small>
       </div>
@@ -494,7 +496,7 @@ function NotifySettings() {
 }
 
 /** Botão que grava uma combinação de teclas (ex.: Ctrl + Shift + M). Esc limpa. */
-function Keybind({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function Keybind({ label, value, global, onChange }: { label: string; value: string; global?: boolean; onChange: (v: string) => void }) {
   const [capturing, setCapturing] = useState(false);
   useEffect(() => {
     if (!capturing) return;
@@ -519,6 +521,13 @@ function Keybind({ label, value, onChange }: { label: string; value: string; onC
       <button className={`keybind ${capturing ? 'capturing' : ''}`} onClick={() => setCapturing((c) => !c)}>
         {capturing ? 'Aperte a combinação… (Esc limpa)' : comboName(value)}
       </button>
+      {value && global === true && <small className="ok-text">Funciona com o jogo ou outra janela em foco.</small>}
+      {value && global === false && (
+        <small className="error">
+          Outro programa já usa esse atalho (o Discord usa Ctrl + Shift + M e Ctrl + Shift + D), então ele só funciona com o Nexo em
+          foco. Escolha outra combinação, por exemplo Ctrl + Alt + M.
+        </small>
+      )}
     </div>
   );
 }
