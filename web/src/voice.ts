@@ -17,6 +17,7 @@ import { getSettings, micConstraints, onSettings, type Settings } from './settin
 import { api } from './api';
 import { playSound } from './sounds';
 import { toast } from './toast';
+import { nativeSystemAudioAvailable, startNativeSystemAudio, type NativeSystemAudio } from './systemAudio';
 
 /** Emoji que alguém mandou na call e que sobe flutuando por cima da tela. */
 export type FloatingReaction = { id: number; emoji: string; name: string; left: number };
@@ -122,6 +123,8 @@ export type VoiceUser = {
  */
 export function useVoice(gateway: Gateway) {
   const roomRef = useRef<Room | null>(null);
+  /** Som do computador vindo do app (sem o som do Nexo), quando está em uso na transmissão. */
+  const nativeAudio = useRef<NativeSystemAudio | null>(null);
   const audioBox = useRef<HTMLDivElement | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -163,6 +166,8 @@ export function useVoice(gateway: Gateway) {
 
   const leave = useCallback(async () => {
     leavingRef.current = true;
+    nativeAudio.current?.stop();
+    nativeAudio.current = null;
     const room = roomRef.current;
     roomRef.current = null;
     await room?.disconnect();
@@ -263,7 +268,11 @@ export function useVoice(gateway: Gateway) {
             rerender();
           })
           .on(RoomEvent.LocalTrackPublished, rerender)
-          .on(RoomEvent.LocalTrackUnpublished, rerender)
+          .on(RoomEvent.LocalTrackUnpublished, (pub) => {
+            // Transmissão parou (botão, janela fechada etc.): para também a captura do som no app.
+            if (pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio) stopNativeAudio();
+            rerender();
+          })
           .on(RoomEvent.Reconnecting, () => setReconnecting(true))
           .on(RoomEvent.Reconnected, () => setReconnecting(false))
           .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
@@ -484,11 +493,23 @@ export function useVoice(gateway: Gateway) {
     rerender();
   };
 
+  const stopNativeAudio = () => {
+    const n = nativeAudio.current;
+    if (!n) return;
+    nativeAudio.current = null;
+    n.stop();
+    const lp = roomRef.current?.localParticipant;
+    const pub = lp?.getTrackPublication(Track.Source.ScreenShareAudio);
+    if (lp && pub?.track?.mediaStreamTrack === n.track) void lp.unpublishTrack(pub.track).catch(() => {});
+  };
+
   const startShare = async (opts: ShareOptions) => {
     const lp = roomRef.current?.localParticipant;
     if (!lp) return;
     const r = RESOLUTIONS[opts.resolution];
     const bitrate = shareBitrate(opts.resolution, opts.fps);
+    // App de computador novo no Windows 11: o som vem por fora, já sem as vozes da call.
+    const useNative = opts.audio && getSettings().streamRemoveCall && (await nativeSystemAudioAvailable());
     await lp.setScreenShareEnabled(
       true,
       {
@@ -498,8 +519,8 @@ export function useVoice(gateway: Gateway) {
         // - App de computador: o Electron captura o som do Windows inteiro, com as vozes da call.
         //   O cancelamento de eco do Chromium usa como referência exatamente o som que o Nexo está
         //   tocando, e como a captura é digital (sem caixa de som no meio) ele consegue apagar as vozes.
-        audio: opts.audio ? shareAudioOptions() : false,
-        systemAudio: opts.audio ? 'include' : 'exclude',
+        audio: opts.audio && !useNative ? shareAudioOptions() : false,
+        systemAudio: opts.audio && !useNative ? 'include' : 'exclude',
         // Nativa: sem limite de tamanho (largura 0 = sem teto), só o fps.
         resolution: { width: r.width, height: r.height, frameRate: opts.fps },
         // Sempre "motion": com "detail" o Chrome trata como apresentação e, quando falta CPU ou
@@ -525,6 +546,27 @@ export function useVoice(gateway: Gateway) {
     // (vale também para a qualidade nativa, em que a resolução fica livre).
     const screen = lp.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack;
     if (screen && opts.fps >= 60) await screen.applyConstraints({ frameRate: { ideal: 60, min: 30 } }).catch(() => {});
+    if (useNative && screen) {
+      stopNativeAudio();
+      const native = await startNativeSystemAudio();
+      if (native && lp.getTrackPublication(Track.Source.ScreenShare)) {
+        nativeAudio.current = native;
+        await lp
+          .publishTrack(native.track, {
+            source: Track.Source.ScreenShareAudio,
+            name: 'screen_share_audio',
+            // Música e jogo: sem cortar silêncio, estéreo e com bitrate de música.
+            dtx: false,
+            red: false,
+            forceStereo: true,
+            audioPreset: { maxBitrate: 128_000 },
+          })
+          .catch((e) => {
+            console.warn('Não deu para publicar o som da transmissão', e);
+            stopNativeAudio();
+          });
+      } else native?.stop();
+    }
     shareOpts.current = opts;
     rerender();
   };
@@ -562,11 +604,13 @@ export function useVoice(gateway: Gateway) {
   const switchShare = async () => {
     const opts = shareOpts.current;
     if (!opts) return;
+    stopNativeAudio();
     await roomRef.current?.localParticipant.setScreenShareEnabled(false);
     await startShare(opts);
   };
 
   const stopShare = async () => {
+    stopNativeAudio();
     await roomRef.current?.localParticipant.setScreenShareEnabled(false);
     shareOpts.current = null;
     rerender();
