@@ -8,9 +8,11 @@
  * - atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco);
  * - som do computador na transmissão SEM o som do próprio Nexo (Windows 11), para quem assiste
  *   não ouvir a própria voz de volta;
- * - atualização automática (baixa a versão nova sozinho e pergunta se pode reiniciar).
+ * - atualização automática (baixa a versão nova sozinho e pergunta se pode reiniciar);
+ * - ícone na bandeja, abrir com o Windows e fechar para a bandeja (Configurações > Configurações do Windows).
  */
-const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor, session, shell } = require('electron');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -18,6 +20,16 @@ const APP_URL = process.env.NEXO_URL || require('./package.json').nexoUrl;
 const APP_ORIGIN = new URL(APP_URL).origin;
 
 let win = null;
+let tray = null;
+let quitting = false;
+
+// Opções do Windows escolhidas no site (guardadas aqui para valerem antes de a página carregar).
+const prefsFile = () => path.join(app.getPath('userData'), 'app-settings.json');
+let prefs = { openAtLogin: false, minimizeToTray: true, startMinimized: false };
+try {
+  prefs = { ...prefs, ...JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) };
+} catch {}
+const startedHidden = process.argv.includes('--hidden');
 
 // Quando um jogo em tela cheia cobre o Nexo, o Windows avisa que a janela está "escondida" e o
 // Chromium desacelera a página, e a transmissão e as chamadas travam. Desliga essa economia.
@@ -27,11 +39,31 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 if (!app.requestSingleInstanceLock()) app.quit();
-app.on('second-instance', () => {
-  if (!win) return;
+function showWindow() {
+  if (!win) return createWindow();
   if (win.isMinimized()) win.restore();
+  win.show();
   win.focus();
-});
+}
+app.on('second-instance', showWindow);
+app.on('before-quit', () => (quitting = true));
+
+function createTray() {
+  if (tray) return;
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip('Nexo');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Abrir o Nexo', click: showWindow },
+      { label: 'Mutar / desmutar', click: () => win && win.webContents.send('shortcut', 'mute') },
+      { label: 'Ensurdecer', click: () => win && win.webContents.send('shortcut', 'deafen') },
+      { type: 'separator' },
+      { label: 'Sair do Nexo', click: () => ((quitting = true), app.quit()) },
+    ]),
+  );
+  tray.on('click', showWindow);
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -43,9 +75,17 @@ function createWindow() {
     title: 'Nexo',
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
+    show: !(startedHidden && prefs.startMinimized),
     webPreferences: { preload: path.join(__dirname, 'preload-main.cjs'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
   win.loadURL(APP_URL);
+  // Fechar para a bandeja: o X só esconde (a call continua). Sair de vez pelo ícone perto do relógio.
+  win.on('close', (e) => {
+    if (!quitting && prefs.minimizeToTray && tray) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
   win.on('closed', () => {
     win = null;
     stopSystemAudio();
@@ -127,6 +167,21 @@ ipcMain.handle('shortcuts:set', (e, keys) => {
   }
   return result;
 });
+// Opções do Windows (Configurações > Configurações do Windows no site).
+ipcMain.on('app:settings', (e, s) => {
+  if (!fromNexo(e) || !s || typeof s !== 'object') return;
+  const next = { openAtLogin: !!s.openAtLogin, minimizeToTray: !!s.minimizeToTray, startMinimized: !!s.startMinimized };
+  if (JSON.stringify(next) === JSON.stringify(prefs)) return;
+  prefs = next;
+  try {
+    fs.writeFileSync(prefsFile(), JSON.stringify(prefs));
+  } catch {}
+  if (app.isPackaged && process.platform !== 'linux')
+    app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin, args: ['--hidden'] });
+});
+// Tempo sem mexer no computador (para o "Ausente" automático).
+ipcMain.handle('app:idle-seconds', (e) => (fromNexo(e) ? powerMonitor.getSystemIdleTime() : 0));
+
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopSystemAudio();
@@ -209,6 +264,7 @@ function setupAutoUpdate() {
     });
     if (response === 0) {
       stopSystemAudio();
+      quitting = true;
       autoUpdater.quitAndInstall();
     }
   });
@@ -249,10 +305,12 @@ app.whenReady().then(() => {
   );
 
   createWindow();
+  createTray();
   setupAutoUpdate();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 
 app.on('window-all-closed', () => {
+  if (tray && prefs.minimizeToTray && !quitting) return;
   if (process.platform !== 'darwin') app.quit();
 });

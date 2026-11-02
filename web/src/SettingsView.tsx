@@ -1,16 +1,47 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mic, MonitorUp, Settings as Gear, Video, Volume2, X, Bell } from 'lucide-react';
+import {
+  Accessibility, Bell, Contact, Keyboard, LogOut, MessageSquare, Mic, Monitor, MonitorUp, Palette, Radio, Settings as Gear, User as UserIcon, Video, Volume2, X,
+} from 'lucide-react';
+import type { User, UserStatus } from './api';
+import {
+  AccessibilitySettings, AccountSettings, AppearanceSettings, ChatSettings, DesktopNotifySettings, KeybindList, ProfileSettings, StreamerSettings, WindowsSettings,
+} from './UserSettings';
 import { MicProcessor, newAudioContext } from './mic';
 import { useShortcutStatus } from './shortcuts';
 import { comboFromEvent, comboName, keyName, micConstraints, resetVoiceSettings, updateSettings, useSettings, type Settings } from './settings';
 import { activeMic, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, type ShareCodec, type ShareResolution } from './voice';
 import { setSoundsEnabled, soundsEnabled, playSound, SOUND_LABELS, type SoundName } from './sounds';
 
-type Tab = 'voice' | 'video' | 'stream' | 'notify';
+type Tab = 'account' | 'profile' | 'appearance' | 'accessibility' | 'voice' | 'video' | 'stream' | 'chat' | 'notify' | 'keybinds' | 'streamer' | 'windows';
 
-/** Tela de configurações: voz, vídeo e notificações. */
-export function SettingsView({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>('voice');
+const GROUPS: { title: string; tabs: [Tab, string, JSX.Element][] }[] = [
+  { title: 'Configurações de usuário', tabs: [['account', 'Minha conta', <UserIcon size={16} />], ['profile', 'Perfis', <Contact size={16} />]] },
+  {
+    title: 'Configurações do app',
+    tabs: [
+      ['appearance', 'Aparência', <Palette size={16} />],
+      ['accessibility', 'Acessibilidade', <Accessibility size={16} />],
+      ['voice', 'Voz', <Mic size={16} />],
+      ['video', 'Vídeo', <Video size={16} />],
+      ['stream', 'Transmissão', <MonitorUp size={16} />],
+      ['chat', 'Chat', <MessageSquare size={16} />],
+      ['notify', 'Notificações', <Bell size={16} />],
+      ['keybinds', 'Atalhos', <Keyboard size={16} />],
+      ['streamer', 'Modo streamer', <Radio size={16} />],
+      ['windows', 'Configurações do Windows', <Monitor size={16} />],
+    ],
+  },
+];
+
+/** Tela de configurações no estilo do Discord: conta e perfil, aparência, voz, vídeo, chat, notificações… */
+export function SettingsView({ onClose, tab: initialTab, user, status, onLogout }: {
+  onClose: () => void;
+  tab?: string;
+  user: User;
+  status: UserStatus;
+  onLogout: () => void;
+}) {
+  const [tab, setTab] = useState<Tab>(GROUPS.some((g) => g.tabs.some(([t]) => t === initialTab)) ? (initialTab as Tab) : 'account');
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -19,17 +50,31 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
   return (
     <div className="settings">
       <nav className="settings-nav">
-        <h3>Configurações do app</h3>
-        <button className={tab === 'voice' ? 'active' : ''} onClick={() => setTab('voice')}><Mic size={16} /> Voz</button>
-        <button className={tab === 'video' ? 'active' : ''} onClick={() => setTab('video')}><Video size={16} /> Vídeo</button>
-        <button className={tab === 'stream' ? 'active' : ''} onClick={() => setTab('stream')}><MonitorUp size={16} /> Transmissão</button>
-        <button className={tab === 'notify' ? 'active' : ''} onClick={() => setTab('notify')}><Bell size={16} /> Notificações</button>
+        {GROUPS.map((g) => (
+          <div key={g.title} className="settings-group">
+            <h3>{g.title}</h3>
+            {g.tabs.map(([t, label, icon]) => (
+              <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{icon} {label}</button>
+            ))}
+          </div>
+        ))}
+        <div className="settings-group">
+          <button className="danger-text" onClick={onLogout}><LogOut size={16} /> Sair da conta</button>
+        </div>
       </nav>
       <section className="settings-body">
+        {tab === 'account' && <AccountSettings user={user} status={status} onLogout={onLogout} onEditProfile={() => setTab('profile')} />}
+        {tab === 'profile' && <ProfileSettings key={user.id} user={user} status={status} />}
+        {tab === 'appearance' && <AppearanceSettings />}
+        {tab === 'accessibility' && <AccessibilitySettings />}
         {tab === 'voice' && <VoiceSettings />}
         {tab === 'video' && <VideoSettings />}
         {tab === 'stream' && <StreamSettings />}
+        {tab === 'chat' && <ChatSettings />}
         {tab === 'notify' && <NotifySettings />}
+        {tab === 'keybinds' && <KeybindList onEdit={() => setTab('voice')} />}
+        {tab === 'streamer' && <StreamerSettings />}
+        {tab === 'windows' && <WindowsSettings />}
       </section>
       <button className="settings-close" title="Fechar (Esc)" onClick={onClose}><X size={20} /><small>ESC</small></button>
     </div>
@@ -451,6 +496,8 @@ function NotifySettings() {
   return (
     <>
       <h2>Notificações</h2>
+      <DesktopNotifySettings />
+      <h3>Sons do app</h3>
       <Toggle
         label="Sons"
         hint="Entrar e sair da call, mutar e mensagem nova com a aba em segundo plano."
@@ -490,7 +537,7 @@ function NotifySettings() {
           ))}
         </>
       )}
-      <p className="muted"><Gear size={14} /> As configurações ficam salvas neste computador.</p>
+      <p className="muted"><Gear size={14} /> As configurações do app ficam salvas neste computador. Conta e perfil valem em todo lugar.</p>
     </>
   );
 }

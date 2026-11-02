@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { userFromToken } from './auth.js';
-import { getChannel, guildPayload, guildsOf, isMember, memberIds, type User } from './db.js';
+import { getChannel, getStatus, guildPayload, guildsOf, isMember, memberIds, type User, type UserStatus } from './db.js';
 
 /**
  * Real-time gateway. One WebSocket per open client tab.
@@ -54,9 +54,50 @@ export async function sendToGuild(guildId: string, t: string, d: unknown) {
 
 export const isOnline = (userId: string) => (sockets.get(userId)?.size ?? 0) > 0;
 
-async function broadcastPresence(user: User) {
-  const status = isOnline(user.id) ? 'online' : 'offline';
+// ---------- Status (como no Discord) ----------
+/** Status escolhido (carregado do banco quando a pessoa conecta). */
+const chosenStatus = new Map<string, UserStatus>();
+/** Quem está ausente por inatividade (o site avisa depois de 10 minutos sem mexer). */
+const afk = new Set<string>();
+export type Presence = 'online' | 'idle' | 'dnd' | 'offline';
+/** O que os outros veem: invisível aparece como offline; parado vira "ausente". */
+export function presenceOf(userId: string): Presence {
+  if (!isOnline(userId)) return 'offline';
+  const s = chosenStatus.get(userId) ?? 'online';
+  if (s === 'invisible') return 'offline';
+  if (s === 'dnd') return 'dnd';
+  if (s === 'idle' || afk.has(userId)) return 'idle';
+  return 'online';
+}
+export const presencesOf = (ids: Iterable<string>) =>
+  [...ids].map((id) => ({ user_id: id, status: presenceOf(id) })).filter((p) => p.status !== 'offline');
+
+const lastSent = new Map<string, Presence>();
+async function broadcastPresence(user: Pick<User, 'id'>) {
+  const status = presenceOf(user.id);
+  if (lastSent.get(user.id) === status) return;
+  if (status === 'offline') lastSent.delete(user.id);
+  else lastSent.set(user.id, status);
   for (const g of await guildsOf(user.id)) await sendToGuild(g.id, 'PRESENCE_UPDATE', { user_id: user.id, status });
+}
+
+/** A pessoa trocou o status (Disponível, Ausente, Não perturbe, Invisível). */
+export async function setUserStatus(userId: string, status: UserStatus) {
+  chosenStatus.set(userId, status);
+  sendToUser(userId, 'STATUS_UPDATE', { status });
+  await broadcastPresence({ id: userId });
+}
+
+/** Perfil mudou (nome, foto, sobre mim…): avisa a própria pessoa e todo mundo dos servidores dela. */
+export async function broadcastUserUpdate(user: User) {
+  const sent = new Set<string>([user.id]);
+  sendToUser(user.id, 'USER_UPDATE', user);
+  for (const g of await guildsOf(user.id))
+    for (const id of await memberIds(g.id)) {
+      if (sent.has(id)) continue;
+      sent.add(id);
+      sendToUser(id, 'USER_UPDATE', user);
+    }
 }
 
 export async function setVoiceState(user: Pick<User, 'id'>, channelId: string | null, flags: VoiceFlags = NO_FLAGS) {
@@ -91,6 +132,8 @@ export function registerGateway(app: FastifyInstance) {
       user = await userFromToken((req.query as { token?: string }).token);
       if (closed) return;
       if (!user) return ws.close(4001, 'Não autenticado');
+      if (!chosenStatus.has(user.id)) chosenStatus.set(user.id, await getStatus(user.id));
+      if (closed) return;
       const set = sockets.get(user.id) ?? new Set();
       const firstSocket = set.size === 0;
       set.add(ws);
@@ -104,8 +147,9 @@ export function registerGateway(app: FastifyInstance) {
           t: 'READY',
           d: {
             user,
+            status: chosenStatus.get(user.id) ?? 'online',
             guilds,
-            presences: [...visible].filter(isOnline).map((id) => ({ user_id: id, status: 'online' })),
+            presences: presencesOf(visible),
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))
               .map(voicePayload),
@@ -122,7 +166,7 @@ export function registerGateway(app: FastifyInstance) {
       await ready;
       const u = user;
       if (!u) return;
-      let msg: { op?: string; channel_id?: string | null };
+      let msg: { op?: string; channel_id?: string | null; idle?: boolean };
       try {
         msg = JSON.parse(String(raw));
       } catch {
@@ -136,6 +180,11 @@ export function registerGateway(app: FastifyInstance) {
             await sendToGuild(ch.guild_id, 'TYPING_START', { channel_id: ch.id, user_id: u.id });
         }
         if (msg.op === 'voice_state') await setVoiceState(u, msg.channel_id ?? null, readFlags(msg));
+        if (msg.op === 'idle') {
+          if (msg.idle) afk.add(u.id);
+          else afk.delete(u.id);
+          await broadcastPresence(u);
+        }
       } catch (e) {
         app.log.error(e);
       }
@@ -151,6 +200,7 @@ export function registerGateway(app: FastifyInstance) {
       set.delete(ws);
       if (set.size === 0) {
         sockets.delete(u.id);
+        afk.delete(u.id);
         await setVoiceState(u, null)
           .then(() => broadcastPresence(u))
           .catch((e) => app.log.error(e));

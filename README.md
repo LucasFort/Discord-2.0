@@ -14,7 +14,11 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Lista de membros online e offline
 - Voz: entrar e sair, silenciar, ensurdecer, indicador de quem está falando, supressão de ruído e cancelamento de eco, lista de quem está em cada canal de voz na barra lateral
 - Câmera
-- **Configurações** (engrenagem ao lado do seu nome ou na call): escolher microfone, saída de som e câmera; volume de entrada e de saída; teste de microfone com medidor e "ouvir minha voz"; detecção de voz com sensibilidade automática ou manual; aperte para falar com tecla e atraso ao soltar; supressão de ruído, cancelamento de eco e ganho automático; prévia da câmera. Ficam salvas no computador de cada um.
+- **Conta e perfil** como no Discord: nome de exibição, usuário, senha, foto, banner, pronomes, "sobre mim" e status personalizado; cartão de perfil ao clicar em alguém
+- **Status**: Disponível, Ausente (também sozinho depois de 10 minutos parado), Não perturbe (sem avisos nem sons) e Invisível
+- **Configurações do servidor** (dono): nome e ícone, renomear/tópico/apagar canais, expulsar membros, convites com validade e limite de usos, apagar servidor; quem não é dono pode sair do servidor
+- **Configurações do app**: aparência (tema escuro, meia-noite, claro ou do sistema; confortável ou compacto; fonte, espaçamento, zoom, 24 h), acessibilidade (saturação, reduzir movimento), chat (emoticons viram emoji, reações, links, spoilers), avisos na área de trabalho (todas, só menções ou nenhuma), lista de atalhos, modo streamer e opções do Windows no app (abrir com o computador, começar minimizado, fechar para a bandeja)
+- **Configurações** de voz (engrenagem ao lado do seu nome ou na call): escolher microfone, saída de som e câmera; volume de entrada e de saída; teste de microfone com medidor e "ouvir minha voz"; detecção de voz com sensibilidade automática ou manual; aperte para falar com tecla e atraso ao soltar; supressão de ruído, cancelamento de eco e ganho automático; prévia da câmera. Ficam salvas no computador de cada um.
 - Volume de cada pessoa na call (passe o mouse no quadrado dela)
 - **Transmissão de tela**: escolha de tela, janela ou aba; qualidade 720p30, 1080p30, 1080p60 ou original 60 fps; "equilibrado" ou "movimento fluido (jogos)"; áudio da transmissão; botão de estatísticas (fps, resolução, perda e se o limite é a CPU ou a internet); quem está na sala vê "AO VIVO" e só recebe o vídeo depois de clicar em **Assistir transmissão**; ampliar e tela cheia
 
@@ -27,6 +31,7 @@ O app (pasta `desktop/`, feito em Electron) abre o Nexo numa janela própria e a
 - áudio do computador na transmissão (Windows). No Windows 11 o som do próprio Nexo fica de fora (captura por processo, pacote `loopback-capture`), então quem assiste não ouve a própria voz de volta;
 - links externos abrindo no navegador;
 - atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco);
+- ícone na bandeja (perto do relógio) com mutar, ensurdecer e sair; abrir com o Windows e fechar para a bandeja;
 - atualização automática (`electron-updater`): a partir da 0.1.3 o app baixa a versão nova sozinho da última release e pergunta se pode reiniciar.
 
 **Para baixar:** https://github.com/LucasFort/Discord-2.0/releases/latest (Windows `.exe`, Linux `.AppImage`). Mande esse link para os amigos.

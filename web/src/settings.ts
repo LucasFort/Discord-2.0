@@ -40,6 +40,34 @@ export type Settings = {
   autoWatchStreams: boolean; // começa a assistir sozinho quando alguém transmite
   streamRemoveCall: boolean; // tira a voz da call do som da transmissão (eco de quem assiste)
   streamVolumes: Record<string, number>; // id de quem transmite -> 0–100 (%) do áudio da transmissão
+  // Aparência e acessibilidade
+  theme: 'dark' | 'midnight' | 'light' | 'system';
+  messageDisplay: 'cozy' | 'compact';
+  fontSize: number; // px do texto das mensagens (12–20)
+  messageGap: number; // px entre grupos de mensagens (0–24)
+  zoom: number; // % do app inteiro (70–150)
+  reduceMotion: boolean;
+  saturation: number; // % de cor (0–100)
+  showAvatars: boolean; // fotos no chat (modo compacto)
+  use24h: boolean;
+  // Chat
+  showReactions: boolean;
+  convertEmoticons: boolean; // :) vira 🙂 ao enviar
+  spoilers: 'click' | 'always'; // mostrar ||spoiler|| ao clicar ou sempre
+  showLinks: boolean; // links clicáveis
+  sendOnEnter: boolean;
+  // Notificações e status
+  desktopNotify: 'all' | 'mentions' | 'off';
+  autoIdle: boolean; // "Ausente" sozinho depois de 10 minutos parado
+  // Modo streamer: esconde informações pessoais quando estiver transmitindo
+  streamerMode: boolean;
+  streamerAuto: boolean; // liga sozinho ao transmitir a tela
+  streamerHideInvites: boolean;
+  streamerHideNames: boolean; // esconde o @usuário
+  // App do Windows
+  openAtLogin: boolean;
+  minimizeToTray: boolean; // o X esconde na bandeja em vez de fechar
+  startMinimized: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -79,6 +107,29 @@ const DEFAULTS: Settings = {
   autoWatchStreams: false,
   streamRemoveCall: true,
   streamVolumes: {},
+  theme: 'dark',
+  messageDisplay: 'cozy',
+  fontSize: 15,
+  messageGap: 16,
+  zoom: 100,
+  reduceMotion: false,
+  saturation: 100,
+  showAvatars: true,
+  use24h: true,
+  showReactions: true,
+  convertEmoticons: true,
+  spoilers: 'click',
+  showLinks: true,
+  sendOnEnter: true,
+  desktopNotify: 'mentions',
+  autoIdle: true,
+  streamerMode: false,
+  streamerAuto: false,
+  streamerHideInvites: true,
+  streamerHideNames: true,
+  openAtLogin: false,
+  minimizeToTray: true,
+  startMinimized: false,
 };
 
 const KEY = 'nexo.settings';

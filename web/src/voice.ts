@@ -17,6 +17,7 @@ import { getSettings, micConstraints, onSettings, type Settings } from './settin
 import { api } from './api';
 import { playSound } from './sounds';
 import { toast } from './toast';
+import { setInCall } from './activity';
 import { nativeSystemAudioAvailable, startNativeSystemAudio, type NativeSystemAudio } from './systemAudio';
 
 /** Emoji que alguém mandou na call e que sobe flutuando por cima da tela. */
@@ -127,6 +128,7 @@ export function useVoice(gateway: Gateway) {
   const nativeAudio = useRef<NativeSystemAudio | null>(null);
   const audioBox = useRef<HTMLDivElement | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
+  useEffect(() => setInCall(!!channelId), [channelId]);
   const [connecting, setConnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const leavingRef = useRef(false); // true quando a pessoa clicou em sair (não reconectar)
