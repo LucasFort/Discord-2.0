@@ -6,7 +6,7 @@ import { requireAuth, signSession } from './auth.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser,
 } from './db.js';
-import { isOnline, sendToGuild, sendToUser } from './gateway.js';
+import { getServerMod, isOnline, sendToGuild, sendToUser, setServerMod, setVoiceState, voiceStateOf } from './gateway.js';
 
 /** Emojis aceitos nas reações (o mesmo conjunto aparece no site). */
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
@@ -28,6 +28,13 @@ const LIVEKIT_URL = normalizeLivekitUrl(env('LIVEKIT_URL'));
 const LIVEKIT_API_KEY = env('LIVEKIT_API_KEY') ?? 'devkey';
 const LIVEKIT_API_SECRET = env('LIVEKIT_API_SECRET') ?? 'secret';
 const livekitConfigured = !!(env('LIVEKIT_URL') && env('LIVEKIT_API_KEY') && env('LIVEKIT_API_SECRET'));
+const roomService = () => new RoomServiceClient(LIVEKIT_URL.replace(/^ws/i, 'http'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+const voiceRoom = (channelId: string) => `voice:${channelId}`;
+/** O que a pessoa pode mandar na call: sem microfone quando o dono do servidor silenciou ou ensurdeceu. */
+const voiceSources = (mod: { mute: boolean; deaf: boolean }) =>
+  [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO].filter(
+    (s) => s !== TrackSource.MICROPHONE || (!mod.mute && !mod.deaf),
+  );
 if (process.env.NODE_ENV === 'production' && !livekitConfigured)
   console.warn('[voz] LIVEKIT_URL, LIVEKIT_API_KEY ou LIVEKIT_API_SECRET não configurados: a voz não vai funcionar.');
 
@@ -250,16 +257,79 @@ export function registerRoutes(app: FastifyInstance) {
         name: req.user.display_name,
         ttl: '6h',
       });
-      // Fase 2: estas fontes passam a depender das permissões "Falar" e "Vídeo" do cargo.
+      const mod = getServerMod(ch.guild_id, req.user.id);
       at.addGrant({
-        room: `voice:${ch.id}`,
+        room: voiceRoom(ch.id),
         roomJoin: true,
         canPublish: true,
         canSubscribe: true,
         canPublishData: true,
-        canPublishSources: [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO],
+        canPublishSources: voiceSources(mod),
       });
-      return { url: LIVEKIT_URL, token: await at.toJwt() };
+      return { url: LIVEKIT_URL, token: await at.toJwt(), server_mute: mod.mute, server_deaf: mod.deaf };
+    });
+
+    // ---------- Moderação de voz (só o dono do servidor) ----------
+    const modBody = z.object({
+      action: z.enum(['mute', 'unmute', 'deafen', 'undeafen', 'disconnect', 'move']),
+      channel_id: z.string().optional(),
+    });
+    api.post('/api/guilds/:guildId/members/:userId/voice', async (req, reply) => {
+      const { guildId, userId } = req.params as { guildId: string; userId: string };
+      const body = modBody.safeParse(req.body);
+      if (!body.success) return reply.code(400).send({ error: 'Ação inválida' });
+      const guild = await getGuild(guildId);
+      if (!guild || guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      if (!(await isMember(guildId, userId))) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
+      const { action, channel_id } = body.data;
+      const v = voiceStateOf(userId);
+      const inVoice = v && v.guildId === guildId ? v : undefined;
+      const by = req.user.display_name;
+
+      if (action === 'mute' || action === 'unmute' || action === 'deafen' || action === 'undeafen') {
+        const patch = action === 'mute' || action === 'unmute' ? { mute: action === 'mute' } : { deaf: action === 'deafen' };
+        const next = { ...getServerMod(guildId, userId), ...patch };
+        // Primeiro o LiveKit (tira ou devolve a permissão do microfone), depois avisa todo mundo:
+        // assim, quando a pessoa recebe o "pode falar", o microfone já está liberado.
+        if (inVoice) {
+          const room = voiceRoom(inVoice.channelId);
+          try {
+            const svc = roomService();
+            if (next.mute || next.deaf) {
+              const p = await svc.getParticipant(room, userId);
+              const mic = p.tracks.find((t) => t.source === TrackSource.MICROPHONE);
+              if (mic) await svc.mutePublishedTrack(room, userId, mic.sid, true);
+            }
+            await svc.updateParticipant(room, userId, {
+              permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: voiceSources(next) },
+            });
+          } catch (e) {
+            req.log.warn(e, 'moderação de voz: LiveKit não respondeu');
+          }
+        }
+        await setServerMod(guildId, userId, patch);
+        if (action === 'mute' || action === 'deafen') sendToUser(userId, 'VOICE_SERVER_ACTION', { action, by });
+        return { ok: true, ...next };
+      }
+
+      if (!inVoice) return reply.code(409).send({ error: 'Essa pessoa não está em nenhum canal de voz' });
+      if (action === 'disconnect') {
+        sendToUser(userId, 'VOICE_SERVER_ACTION', { action, by });
+        await setVoiceState({ id: userId }, null);
+        await roomService().removeParticipant(voiceRoom(inVoice.channelId), userId).catch(() => {});
+        return { ok: true };
+      }
+      // Mover: o site da pessoa troca de canal sozinho. Se em 5 s ela ainda estiver no canal antigo, é tirada de lá.
+      const target = channel_id ? await getChannel(channel_id) : undefined;
+      if (!target || target.type !== 'voice' || target.guild_id !== guildId) return reply.code(400).send({ error: 'Canal de voz inválido' });
+      if (target.id === inVoice.channelId) return { ok: true };
+      const from = inVoice.channelId;
+      sendToUser(userId, 'VOICE_SERVER_ACTION', { action, by, channel_id: target.id });
+      setTimeout(() => {
+        if (voiceStateOf(userId)?.channelId === from)
+          void setVoiceState({ id: userId }, null).then(() => roomService().removeParticipant(voiceRoom(from), userId)).catch(() => {});
+      }, 5000);
+      return { ok: true };
     });
   });
 }

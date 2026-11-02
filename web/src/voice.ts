@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  DisconnectReason,
   Room,
   RoomEvent,
   Track,
@@ -117,6 +118,11 @@ export function useVoice(gateway: Gateway) {
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const deafRef = useRef(false);
+  // Silenciado/ensurdecido pelo dono do servidor: vale por cima do que a pessoa escolheu.
+  const serverRef = useRef({ mute: false, deaf: false });
+  const [server, setServer] = useState({ mute: false, deaf: false });
+  const isDeaf = () => deafRef.current || serverRef.current.deaf;
+  const micBlocked = () => serverRef.current.mute || serverRef.current.deaf;
   const [watching, setWatching] = useState<Record<string, true>>({});
   const [floating, setFloating] = useState<FloatingReaction[]>([]);
   const addFloating = useCallback((emoji: string, name: string) => {
@@ -154,6 +160,8 @@ export function useVoice(gateway: Gateway) {
     setChannelId(null);
     setWatching({});
     setReconnecting(false);
+    serverRef.current = { mute: false, deaf: false };
+    setServer(serverRef.current);
     gateway.send({ op: 'voice_state', channel_id: null });
   }, [gateway]);
 
@@ -168,7 +176,12 @@ export function useVoice(gateway: Gateway) {
         void micCtx.resume().catch(() => {});
       }
       try {
-        const { url, token } = await api<{ url: string; token: string }>('POST', `/channels/${id}/voice-token`);
+        const { url, token, server_mute, server_deaf } = await api<{ url: string; token: string; server_mute?: boolean; server_deaf?: boolean }>(
+          'POST',
+          `/channels/${id}/voice-token`,
+        );
+        serverRef.current = { mute: !!server_mute, deaf: !!server_deaf };
+        setServer(serverRef.current);
         const room = new Room({
           adaptiveStream: true,
           dynacast: true,
@@ -196,7 +209,7 @@ export function useVoice(gateway: Gateway) {
             if (track.kind === Track.Kind.Audio) {
               audioBox.current?.appendChild(track.attach());
               feedRemoteAudio(room);
-              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, deafRef.current, room));
+              (track as RemoteAudioTrack).setVolume(volumeFor(p.identity, pub.source, isDeaf(), room));
             }
             rerender();
           })
@@ -240,8 +253,10 @@ export function useVoice(gateway: Gateway) {
           .on(RoomEvent.LocalTrackUnpublished, rerender)
           .on(RoomEvent.Reconnecting, () => setReconnecting(true))
           .on(RoomEvent.Reconnected, () => setReconnecting(false))
-          .on(RoomEvent.Disconnected, () => {
+          .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
             if (roomRef.current !== room) return;
+            // Tirado da call pelo dono do servidor: não volta sozinho.
+            if (reason === DisconnectReason.PARTICIPANT_REMOVED) leavingRef.current = true;
             // Queda que o próprio LiveKit não conseguiu recuperar: entra de novo sozinho (até 3 vezes seguidas).
             if (!leavingRef.current && rejoinTries.current < 3) {
               rejoinTries.current++;
@@ -261,7 +276,7 @@ export function useVoice(gateway: Gateway) {
         room.remoteParticipants.forEach((p) => p.trackPublications.forEach((pub) => autoSubscribe(pub, p.identity)));
         // Sem microfone (permissão negada ou nenhum dispositivo) a pessoa ainda entra, só que mutada.
         try {
-          await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current, micConstraints());
+          await room.localParticipant.setMicrophoneEnabled(!muted && !deafRef.current && !micBlocked(), micConstraints());
           await attachMicProcessor(room);
         } catch (e) {
           setMuted(true);
@@ -328,7 +343,7 @@ export function useVoice(gateway: Gateway) {
 
   const applyVolumes = useCallback(() => {
     roomRef.current?.remoteParticipants.forEach((p) =>
-      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, pub.source, deafRef.current, roomRef.current))),
+      p.audioTrackPublications.forEach((pub) => (pub.track as RemoteAudioTrack | undefined)?.setVolume(volumeFor(p.identity, pub.source, isDeaf(), roomRef.current))),
     );
   }, []);
 
@@ -387,6 +402,10 @@ export function useVoice(gateway: Gateway) {
 
   const toggleMute = async () => {
     const next = !muted;
+    if (!next && micBlocked()) {
+      toast(serverRef.current.deaf ? 'O dono do servidor ensurdeceu você' : 'O dono do servidor silenciou você');
+      return;
+    }
     setMuted(next);
     playSound(next ? 'mute' : 'unmute');
     if (!next && deafened) toggleDeafen();
@@ -399,6 +418,10 @@ export function useVoice(gateway: Gateway) {
 
   const toggleDeafen = () => {
     const next = !deafRef.current;
+    if (!next && serverRef.current.deaf) {
+      toast('O dono do servidor ensurdeceu você');
+      return;
+    }
     deafRef.current = next;
     playSound(next ? 'deafen' : 'undeafen');
     setDeafened(next);
@@ -406,8 +429,26 @@ export function useVoice(gateway: Gateway) {
     const room = roomRef.current;
     if (room)
       void room.localParticipant
-        .setMicrophoneEnabled(!next && !muted, micConstraints())
-        .then(() => (!next && !muted ? attachMicProcessor(room) : undefined))
+        .setMicrophoneEnabled(!next && !muted && !micBlocked(), micConstraints())
+        .then(() => (!next && !muted && !micBlocked() ? attachMicProcessor(room) : undefined))
+        .catch(() => {});
+  };
+
+  /** O dono do servidor silenciou ou ensurdeceu (ou liberou) esta pessoa. */
+  const setServerState = (mute: boolean, deaf: boolean) => {
+    const prev = serverRef.current;
+    if (prev.mute === mute && prev.deaf === deaf) return;
+    const wasBlocked = micBlocked();
+    serverRef.current = { mute, deaf };
+    setServer(serverRef.current);
+    applyVolumes();
+    const room = roomRef.current;
+    if (!room) return;
+    if (micBlocked()) void room.localParticipant.setMicrophoneEnabled(false).catch(() => {});
+    else if (wasBlocked && !muted && !deafRef.current)
+      void room.localParticipant
+        .setMicrophoneEnabled(true, micConstraints())
+        .then(() => attachMicProcessor(room))
         .catch(() => {});
   };
 
@@ -552,6 +593,9 @@ export function useVoice(gateway: Gateway) {
     users,
     muted,
     deafened,
+    serverMuted: server.mute,
+    serverDeafened: server.deaf,
+    setServerState,
     camera: !!local?.camera,
     sharing: !!local?.isSharing,
     join,

@@ -12,6 +12,20 @@ const sockets = new Map<string, Set<WebSocket>>(); // userId -> sockets
 type VoiceFlags = { self_mute: boolean; self_deaf: boolean; self_stream: boolean; self_video: boolean };
 const NO_FLAGS: VoiceFlags = { self_mute: false, self_deaf: false, self_stream: false, self_video: false };
 const voiceStates = new Map<string, { userId: string; channelId: string; guildId: string } & VoiceFlags>(); // userId -> state
+/** Silenciado/ensurdecido pelo dono do servidor ("guildId:userId"). Vale em todos os canais de voz do servidor. */
+const serverMod = new Map<string, { mute: boolean; deaf: boolean }>();
+export const getServerMod = (guildId: string, userId: string) => serverMod.get(`${guildId}:${userId}`) ?? { mute: false, deaf: false };
+export const voiceStateOf = (userId: string) => voiceStates.get(userId);
+
+/** Muda o silenciar/ensurdecer do servidor e avisa todo mundo se a pessoa está na voz desse servidor. */
+export async function setServerMod(guildId: string, userId: string, patch: Partial<{ mute: boolean; deaf: boolean }>) {
+  const next = { ...getServerMod(guildId, userId), ...patch };
+  if (!next.mute && !next.deaf) serverMod.delete(`${guildId}:${userId}`);
+  else serverMod.set(`${guildId}:${userId}`, next);
+  const v = voiceStates.get(userId);
+  if (v && v.guildId === guildId) await sendToGuild(guildId, 'VOICE_STATE_UPDATE', voicePayload(v));
+  return next;
+}
 
 /** Só aceita os quatro indicadores, como booleanos (o resto da mensagem é ignorado). */
 function readFlags(msg: Record<string, unknown>): VoiceFlags {
@@ -25,6 +39,8 @@ const voicePayload = (v: { userId: string; guildId: string; channelId: string } 
   self_deaf: v.self_deaf,
   self_stream: v.self_stream,
   self_video: v.self_video,
+  server_mute: getServerMod(v.guildId, v.userId).mute,
+  server_deaf: getServerMod(v.guildId, v.userId).deaf,
 });
 
 export function sendToUser(userId: string, t: string, d: unknown) {
@@ -43,7 +59,7 @@ async function broadcastPresence(user: User) {
   for (const g of await guildsOf(user.id)) await sendToGuild(g.id, 'PRESENCE_UPDATE', { user_id: user.id, status });
 }
 
-async function setVoiceState(user: User, channelId: string | null, flags: VoiceFlags = NO_FLAGS) {
+export async function setVoiceState(user: Pick<User, 'id'>, channelId: string | null, flags: VoiceFlags = NO_FLAGS) {
   const prev = voiceStates.get(user.id);
   // Mesmo canal: só mudou mutado, ensurdecido, transmitindo ou câmera.
   if (prev && channelId && prev.channelId === channelId) {

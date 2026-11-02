@@ -13,7 +13,10 @@ export type State = {
   voiceFlags: Record<string, VoiceFlags>; // userId -> mutado, ensurdecido, transmitindo, câmera
   messages: Record<string, Message[]>; // channelId -> messages
   typing: Record<string, Record<string, number>>; // channelId -> userId -> expires at
+  voiceAction: VoiceServerAction | null; // última ação do dono do servidor sobre mim (desconectar, mover…)
 };
+
+export type VoiceServerAction = { n: number; action: 'mute' | 'deafen' | 'disconnect' | 'move'; by: string; channel_id?: string };
 
 type Action =
   | { t: 'READY'; d: { user: User; guilds: Guild[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
@@ -26,18 +29,33 @@ type Action =
   | { t: 'PRESENCE_UPDATE'; d: { user_id: string; status: 'online' | 'offline' } }
   | { t: 'VOICE_STATE_UPDATE'; d: VoiceState }
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
-  | { t: 'TYPING_SWEEP' };
+  | { t: 'TYPING_SWEEP' }
+  | { t: 'VOICE_SERVER_ACTION'; d: Omit<VoiceServerAction, 'n'> };
 
-export type VoiceFlags = { self_mute?: boolean; self_deaf?: boolean; self_stream?: boolean; self_video?: boolean };
+export type VoiceFlags = {
+  self_mute?: boolean;
+  self_deaf?: boolean;
+  self_stream?: boolean;
+  self_video?: boolean;
+  server_mute?: boolean; // silenciado pelo dono do servidor
+  server_deaf?: boolean; // ensurdecido pelo dono do servidor
+};
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null } & VoiceFlags;
 
-const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {} };
+const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
 }
 
-const flagsOf = (v: VoiceFlags): VoiceFlags => ({ self_mute: !!v.self_mute, self_deaf: !!v.self_deaf, self_stream: !!v.self_stream, self_video: !!v.self_video });
+const flagsOf = (v: VoiceFlags): VoiceFlags => ({
+  self_mute: !!v.self_mute,
+  self_deaf: !!v.self_deaf,
+  self_stream: !!v.self_stream,
+  self_video: !!v.self_video,
+  server_mute: !!v.server_mute,
+  server_deaf: !!v.server_deaf,
+});
 
 function reducer(s: State, a: Action): State {
   switch (a.t) {
@@ -133,6 +151,8 @@ function reducer(s: State, a: Action): State {
         typing: { ...s.typing, [a.d.channel_id]: { ...s.typing[a.d.channel_id], [a.d.user_id]: Date.now() + 8000 } },
       };
     }
+    case 'VOICE_SERVER_ACTION':
+      return { ...s, voiceAction: { ...a.d, n: (s.voiceAction?.n ?? 0) + 1 } };
     case 'TYPING_SWEEP': {
       const now = Date.now();
       let changed = false;
