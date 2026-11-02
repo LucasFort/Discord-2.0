@@ -5,13 +5,24 @@ import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk'
 import { requireAuth, signSession } from './auth.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser, memberIds,
+  pinnedMessages, searchMessages,
 } from './db.js';
 import {
   broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
 } from './gateway.js';
 
-/** Emojis aceitos nas reações (o mesmo conjunto aparece no site). */
-const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
+/** Reação: um emoji (qualquer um, como no Discord). Recusa texto comum para ninguém "reagir" com palavras. */
+const isEmoji = (s: string) => s.length > 0 && s.length <= 16 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s) && !/[A-Za-z0-9<>]/.test(s);
+
+/** Anexos: até 4 por mensagem, 8 MB cada (como o limite grátis do Discord). */
+const MAX_FILE = 8 * 1024 * 1024;
+const attachmentBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  type: z.string().max(100).regex(/^[\w.+-]+\/[\w.+-]+$/).default('application/octet-stream'),
+  data: z.string().max(Math.ceil((MAX_FILE * 4) / 3) + 8), // base64
+});
+/** Tipos que o navegador pode abrir direto; o resto baixa como arquivo (evita HTML/JS rodando no site). */
+const INLINE_TYPES = /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm)|audio\/(mpeg|ogg|wav|webm)|text\/plain|application\/pdf)$/;
 
 /** Payload do servidor + quem está online agora (para a lista de membros já abrir certa). */
 const withPresence = <T extends { members: { id: string }[] }>(g: T) => ({ ...g, presences: presencesOf(g.members.map((m) => m.id)) });
@@ -108,6 +119,19 @@ export function registerRoutes(app: FastifyInstance) {
     return { token: await signSession(row.id), user: await getUser(row.id) };
   });
 
+  app.get('/api/attachments/:id/:name', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const a = (await get('SELECT name, type, data FROM attachments WHERE id = ?', id)) as { name: string; type: string; data: string } | undefined;
+    if (!a) return reply.code(404).send({ error: 'Arquivo não encontrado' });
+    const inline = INLINE_TYPES.test(a.type);
+    reply
+      .header('content-type', inline ? a.type : 'application/octet-stream')
+      .header('content-disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`)
+      .header('x-content-type-options', 'nosniff')
+      .header('cache-control', 'public, max-age=31536000, immutable');
+    return reply.send(Buffer.from(a.data, 'base64'));
+  });
+
   // Tudo abaixo exige login
   app.register(async (api) => {
     api.addHook('preHandler', requireAuth);
@@ -200,13 +224,36 @@ export function registerRoutes(app: FastifyInstance) {
       config: { rateLimit: { max: 20, timeWindow: '10 seconds', keyGenerator: (req: { user?: { id: string }; ip: string }) => req.user?.id ?? req.ip } },
     };
 
-    api.post('/api/channels/:channelId/messages', messageLimit, async (req, reply) => {
+    api.post('/api/channels/:channelId/messages', { ...messageLimit, bodyLimit: 40 * 1024 * 1024 }, async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
       if (!ch || ch.type !== 'text' || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
-      const { content } = z.object({ content: z.string().trim().min(1).max(4000) }).parse(req.body);
+      const body = z
+        .object({
+          content: z.string().trim().max(4000).default(''),
+          reply_to: z.string().max(40).nullable().optional(),
+          attachments: z.array(attachmentBody).max(4).default([]),
+        })
+        .parse(req.body);
+      if (!body.content && !body.attachments.length) return reply.code(400).send({ error: 'Mensagem vazia' });
+      const files = body.attachments.map((a) => ({ ...a, bytes: Buffer.from(a.data, 'base64') }));
+      if (files.some((f) => f.bytes.length > MAX_FILE)) return reply.code(413).send({ error: 'Arquivo maior que 8 MB' });
+      let replyTo: string | null = null;
+      if (body.reply_to) {
+        const ref = await getMessage(body.reply_to);
+        if (ref && ref.channel_id === channelId) replyTo = ref.id;
+      }
       const id = newId();
-      await run('INSERT INTO messages (id, channel_id, author_id, content, created_at) VALUES (?, ?, ?, ?, ?)', id, channelId, req.user.id, content, Date.now());
+      const now = Date.now();
+      await run(
+        'INSERT INTO messages (id, channel_id, author_id, content, created_at, reply_to) VALUES (?, ?, ?, ?, ?, ?)',
+        id, channelId, req.user.id, body.content, now, replyTo,
+      );
+      for (const f of files)
+        await run(
+          'INSERT INTO attachments (id, message_id, name, type, size, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          newId(), id, f.name.replace(/[\\/]/g, '_'), f.type, f.bytes.length, f.bytes.toString('base64'), now,
+        );
       const msg = (await getMessage(id))!;
       await sendToGuild(ch.guild_id, 'MESSAGE_CREATE', msg);
       return msg;
@@ -235,10 +282,43 @@ export function registerRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
+    // ---------- Anexos ----------
+    // Fora do login (como o CDN do Discord): o endereço tem um id aleatório que só quem vê a mensagem conhece.
+    // (registrado lá embaixo, fora deste bloco)
+
+    // ---------- Fixar mensagens ----------
+    api.put('/api/messages/:id/pin', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const msg = await getMessage(id);
+      const ch = msg && (await getChannel(msg.channel_id));
+      if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const guild = (await getGuild(ch.guild_id))!;
+      if (guild.owner_id !== req.user.id && msg.author.id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor ou quem escreveu pode fixar' });
+      const { pinned } = z.object({ pinned: z.boolean() }).parse(req.body);
+      await run('UPDATE messages SET pinned = ? WHERE id = ?', pinned ? 1 : 0, id);
+      const updated = (await getMessage(id))!;
+      await sendToGuild(ch.guild_id, 'MESSAGE_UPDATE', updated);
+      return updated;
+    });
+
+    api.get('/api/channels/:channelId/pins', async (req, reply) => {
+      const { channelId } = req.params as { channelId: string };
+      const ch = await getChannel(channelId);
+      if (!ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      return pinnedMessages(channelId);
+    });
+
+    api.get('/api/guilds/:guildId/search', async (req, reply) => {
+      const { guildId } = req.params as { guildId: string };
+      if (!(await isMember(guildId, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const { q } = z.object({ q: z.string().trim().min(1).max(100) }).parse(req.query);
+      return searchMessages(guildId, q);
+    });
+
     // ---------- Reações ----------
     api.put('/api/messages/:id/reactions/:emoji', messageLimit, async (req, reply) => {
       const { id, emoji } = req.params as { id: string; emoji: string };
-      if (!REACTIONS.includes(emoji)) return reply.code(400).send({ error: 'Reação inválida' });
+      if (!isEmoji(emoji)) return reply.code(400).send({ error: 'Reação inválida' });
       const msg = await getMessage(id);
       const ch = msg && (await getChannel(msg.channel_id));
       if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });

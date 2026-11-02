@@ -5,7 +5,7 @@ import {
   PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
   ChevronDown, DoorOpen,
 } from 'lucide-react';
-import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { api, API_MISSING, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
 import { useUpdateAvailable } from './update';
@@ -14,7 +14,9 @@ import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings, getSettings, type Settings } from './settings';
 import { myPresence, useStore, type Gateway, type State, type VoiceFlags } from './store';
-import { Avatar, GuildIcon, initials, ProfileCard, StatusMenu } from './profile';
+import { Avatar, GuildIcon, initials, openProfile, ProfileCard, setProfileOpener, StatusMenu, type ProfileOpen } from './profile';
+import { Chat } from './chat';
+import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { ServerSettings } from './ServerSettings';
 import { mentionsMe } from './notify';
 import type { Presence } from './api';
@@ -133,12 +135,13 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState<false | string>(false); // aba aberta
   const [statusMenu, setStatusMenu] = useState(false);
   const [profile, setProfile] = useState<ProfileOpen | null>(null);
+  useUnreadVersion();
   const [serverSettings, setServerSettings] = useState<string | null>(null);
   const settings = useSettings();
   const streamer = streamerOn(settings, voice.sharing);
   useEffect(() => {
-    openProfileFn = setProfile;
-    return () => void (openProfileFn = null);
+    setProfileOpener(setProfile);
+    return () => setProfileOpener(null);
   }, []);
   const presenceOf = (id: string): Presence => (id === state.user?.id ? myPresence(state.status) : state.presence[id] ?? 'offline');
   const toggleSounds = () => {
@@ -222,11 +225,17 @@ function Main({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="app">
       <nav className="guilds">
-        {state.guilds.map((g) => (
-          <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''} ${g.icon ? 'has-icon' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
-            <GuildIcon name={g.name} icon={g.icon} />
-          </button>
-        ))}
+        {state.guilds.map((g) => {
+          const text = g.channels.filter((c) => c.type === 'text');
+          const unread = g.id !== guild?.id && text.some((c) => isUnread(c.id, c.last_message_id));
+          const mentions = text.reduce((n, c) => n + mentionCount(c.id), 0);
+          return (
+            <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''} ${g.icon ? 'has-icon' : ''} ${unread ? 'unread' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
+              <GuildIcon name={g.name} icon={g.icon} />
+              {mentions > 0 && <span className="count-badge">{mentions > 99 ? '99+' : mentions}</span>}
+            </button>
+          );
+        })}
         <div className="guild-sep" />
         <button className="guild add" title="Criar servidor" onClick={createGuild}><Plus size={22} /></button>
         <button className="guild add" title="Entrar com convite" onClick={joinGuild}><LogIn size={20} /></button>
@@ -295,7 +304,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             onSettings={() => setSettingsOpen('voice')}
           />
         ) : textChannel ? (
-          <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
+          <Chat key={textChannel.id} channel={textChannel} guild={guild} state={state} dispatch={dispatch} gateway={gateway} onOpenChannel={(id) => (setChannelId(id), setView('text'))} />
         ) : (
           <div className="empty">Nenhum canal de texto.</div>
         )}
@@ -364,6 +373,7 @@ function ChannelList(props: {
 }) {
   const { guild, state, me, activeId, onOpen, onMemberMenu, voiceSpeaking, streamer, onServerSettings, onLeave } = props;
   const isOwner = guild.owner_id === me.id;
+  useUnreadVersion();
   const [menu, setMenu] = useState(false);
   const [chMenu, setChMenu] = useState<{ c: Channel; x: number; y: number } | null>(null);
   useEffect(() => {
@@ -409,7 +419,7 @@ function ChannelList(props: {
         .map((c) => (
           <div key={c.id}>
             <button
-              className={`channel ${c.id === activeId ? 'active' : ''}`}
+              className={`channel ${c.id === activeId ? 'active' : ''} ${type === 'text' && c.id !== activeId && isUnread(c.id, c.last_message_id) ? 'unread' : ''}`}
               onClick={() => onOpen(c)}
               onContextMenu={(e) => {
                 if (!isOwner) return;
@@ -418,6 +428,7 @@ function ChannelList(props: {
               }}
             >
               <span className="hash">{type === 'text' ? <Hash size={18} /> : <Volume2 size={18} />}</span> <span className="channel-name">{c.name}</span>
+              {type === 'text' && mentionCount(c.id) > 0 && <span className="count-badge">{mentionCount(c.id)}</span>}
             </button>
             {type === 'voice' &&
               guild.members
@@ -494,191 +505,6 @@ function MemberList({ guild, presenceOf }: { guild: Guild; presenceOf: (id: stri
       {offline.map((m) => row(m, true))}
     </aside>
   );
-}
-
-// ---------------------------------------------------------------- Chat
-function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => void; gateway: Gateway }) {
-  const { channel, state, dispatch, gateway } = props;
-  const messages = state.messages[channel.id];
-  const [text, setText] = useState('');
-  const [hasMore, setHasMore] = useState(true);
-  const listRef = useRef<HTMLDivElement>(null);
-  const lastTyping = useRef(0);
-  const stick = useRef(true);
-
-  useEffect(() => {
-    api<Message[]>('GET', `/channels/${channel.id}/messages?limit=50`).then((m) => {
-      dispatch({ t: 'MESSAGES_LOADED', d: { channel_id: channel.id, messages: m, older: false } });
-      setHasMore(m.length === 50);
-    });
-  }, [channel.id, dispatch]);
-
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages?.length]);
-
-  const loadOlder = async () => {
-    if (!messages?.length || !hasMore) return;
-    const el = listRef.current!;
-    const prevHeight = el.scrollHeight;
-    const older = await api<Message[]>('GET', `/channels/${channel.id}/messages?limit=50&before=${messages[0].id}`);
-    setHasMore(older.length === 50);
-    stick.current = false;
-    dispatch({ t: 'MESSAGES_LOADED', d: { channel_id: channel.id, messages: older, older: true } });
-    requestAnimationFrame(() => (el.scrollTop = el.scrollHeight - prevHeight));
-  };
-
-  const onScroll = () => {
-    const el = listRef.current!;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (el.scrollTop < 60) loadOlder();
-  };
-
-  const send = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const raw = text.trim();
-    if (!raw) return;
-    const content = getSettings().convertEmoticons ? convertEmoticons(raw) : raw;
-    setText('');
-    stick.current = true;
-    await api('POST', `/channels/${channel.id}/messages`, { content }).catch((err) => alert(err.message));
-  };
-
-  const onType = (v: string) => {
-    setText(v);
-    if (Date.now() - lastTyping.current > 6000) {
-      lastTyping.current = Date.now();
-      gateway.send({ op: 'typing', channel_id: channel.id });
-    }
-  };
-
-  const typingNames = Object.keys(state.typing[channel.id] ?? {})
-    .map((id) => state.guilds.flatMap((g) => g.members).find((m) => m.id === id)?.display_name)
-    .filter(Boolean);
-
-  return (
-    <div className="chat">
-      <header className="topbar">
-        <span className="hash"><Hash size={20} /></span> {channel.name}
-        {channel.topic && <span className="topic" title={channel.topic}>{channel.topic}</span>}
-      </header>
-      <div className="messages" ref={listRef} onScroll={onScroll}>
-        {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
-        {messages?.map((m, i) => {
-          const prev = messages[i - 1];
-          const grouped = prev && prev.author.id === m.author.id && m.created_at - prev.created_at < 5 * 60_000;
-          return <MessageRow key={m.id} msg={m} grouped={!!grouped} mine={m.author.id === state.user?.id} me={state.user!.id} members={state.guilds.find((g) => g.id === channel.guild_id)?.members ?? []} />;
-        })}
-      </div>
-      <form className="composer" onSubmit={send}>
-        <input value={text} onChange={(e) => onType(e.target.value)} placeholder={`Conversar em #${channel.name}`} maxLength={4000} />
-      </form>
-      <div className="typing">{typingNames.length > 0 && `${typingNames.join(', ')} ${typingNames.length > 1 ? 'estão' : 'está'} digitando…`}</div>
-    </div>
-  );
-}
-
-function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped: boolean; mine: boolean; me: string; members: User[] }) {
-  const time = new Date(msg.created_at);
-  const s = useSettings();
-  const author = members.find((m) => m.id === msg.author.id) ?? msg.author; // perfil atualizado (foto, nome)
-  const meUser = members.find((m) => m.id === me) ?? null;
-  const mention = !mine && mentionsMe(msg.content, meUser);
-  const hhmm = time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: !s.use24h });
-  const compact = s.messageDisplay === 'compact';
-  const [picker, setPicker] = useState(false);
-  const react = async (emoji: string) => {
-    setPicker(false);
-    const on = !msg.reactions?.find((r) => r.emoji === emoji)?.user_ids.includes(me);
-    if (on) playSound('reaction');
-    await api('PUT', `/messages/${msg.id}/reactions/${encodeURIComponent(emoji)}`, { on }).catch((e) => alert(e.message));
-  };
-  const names = (ids: string[]) => ids.map((id) => members.find((m) => m.id === id)?.display_name ?? '?').join(', ');
-  const edit = async () => {
-    const content = await ask('Editar mensagem', { value: msg.content, okText: 'Salvar' });
-    if (content && content !== msg.content) await api('PATCH', `/messages/${msg.id}`, { content });
-  };
-  const remove = async () => {
-    if (confirm('Apagar esta mensagem?')) await api('DELETE', `/messages/${msg.id}`).catch((e) => alert(e.message));
-  };
-  return (
-    <div className={`message ${grouped && !compact ? 'grouped' : ''} ${compact ? 'compact' : ''} ${mention ? 'mention' : ''}`}>
-      {compact ? (
-        <span className="compact-time">{hhmm}</span>
-      ) : grouped ? (
-        <span className="gutter-time">{hhmm}</span>
-      ) : (
-        <span className="msg-avatar" onClick={(e) => openProfile(author, e)}><Avatar user={author} size={40} /></span>
-      )}
-      <div className="message-body">
-        {compact && (
-          <strong className="compact-author" onClick={(e) => openProfile(author, e)}>
-            {s.showAvatars && <Avatar user={author} size={18} />} {author.display_name}
-          </strong>
-        )}
-        {!grouped && !compact && (
-          <div className="message-head">
-            <strong className="author" onClick={(e) => openProfile(author, e)}>{author.display_name}</strong>
-            <small>{time.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', hour12: !s.use24h })}</small>
-          </div>
-        )}
-        <div className="message-content">
-          <Markdown text={msg.content} />
-          {msg.edited_at && <small className="edited"> (editado)</small>}
-        </div>
-        {s.showReactions && !!msg.reactions?.length && (
-          <div className="reactions">
-            {msg.reactions.map((r) => (
-              <button
-                key={r.emoji}
-                className={`reaction ${r.user_ids.includes(me) ? 'mine' : ''}`}
-                title={`Reagiram com ${r.emoji}: ${names(r.user_ids)}`}
-                onClick={() => react(r.emoji)}
-              >
-                <span className="reaction-emoji">{r.emoji}</span> {r.user_ids.length}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {picker && (
-        <div className="emoji-picker" onMouseLeave={() => setPicker(false)}>
-          {REACTIONS.map((e) => (
-            <button key={e} onClick={() => react(e)}>{e}</button>
-          ))}
-        </div>
-      )}
-      <div className="message-actions">
-        <button className="icon small" title="Reagir" onClick={() => setPicker((p) => !p)}><SmilePlus size={16} /></button>
-        {mine && <button className="icon small" title="Editar" onClick={edit}><Pencil size={16} /></button>}
-        <button className="icon small" title="Apagar" onClick={remove}><Trash2 size={16} /></button>
-      </div>
-    </div>
-  );
-}
-
-/** Markdown mínimo: **negrito**, *itálico*, `código`, ||spoiler|| e links. */
-function Markdown({ text }: { text: string }) {
-  const s = useSettings();
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\|\|[^|]+\|\||https?:\/\/\S+)/g);
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i}>{p.slice(2, -2)}</strong>;
-        if (p.startsWith('||') && p.endsWith('||') && p.length > 4) return <Spoiler key={i} text={p.slice(2, -2)} always={s.spoilers === 'always'} />;
-        if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return <em key={i}>{p.slice(1, -1)}</em>;
-        if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return <code key={i}>{p.slice(1, -1)}</code>;
-        if (/^https?:\/\//.test(p) && !s.showLinks) return <span key={i}>{p}</span>;
-        if (/^https?:\/\//.test(p)) return <a key={i} href={p} target="_blank" rel="noreferrer noopener">{p}</a>;
-        return <span key={i}>{p}</span>;
-      })}
-    </>
-  );
-}
-function Spoiler({ text, always }: { text: string; always?: boolean }) {
-  const [open, setOpen] = useState(!!always);
-  return <span className={`spoiler ${open ? 'open' : ''}`} onClick={() => setOpen(true)}>{text}</span>;
 }
 
 // ---------------------------------------------------------------- Voz
@@ -1402,20 +1228,3 @@ function StreamStats({ track }: { track: Track }) {
 const STATUS_TEXT = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' } as const;
 /** Modo streamer ligado agora (sempre, ou sozinho enquanto transmite a tela). */
 export const streamerOn = (s: Settings, sharing: boolean) => s.streamerMode || (s.streamerAuto && sharing);
-
-/** Converte os emoticons mais comuns em emoji ao enviar, como o Discord. */
-const EMOTICONS: [RegExp, string][] = [
-  [/(^|\s):\)(?=\s|$)/g, '$1🙂'], [/(^|\s):D(?=\s|$)/g, '$1😄'], [/(^|\s):\((?=\s|$)/g, '$1🙁'], [/(^|\s);\)(?=\s|$)/g, '$1😉'],
-  [/(^|\s):P(?=\s|$)/gi, '$1😛'], [/(^|\s):O(?=\s|$)/g, '$1😮'], [/(^|\s)<3(?=\s|$)/g, '$1❤️'], [/(^|\s):'\((?=\s|$)/g, '$1😢'],
-  [/(^|\s)xD(?=\s|$)/g, '$1😆'],
-];
-const convertEmoticons = (t: string) => EMOTICONS.reduce((acc, [re, out]) => acc.replace(re, out), t);
-
-/** Abre o cartão de perfil de alguém perto do elemento clicado. */
-type ProfileOpen = { user: User; x: number; y: number };
-let openProfileFn: ((p: ProfileOpen) => void) | null = null;
-const openProfile = (user: User, e: React.MouseEvent) => {
-  e.stopPropagation();
-  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  openProfileFn?.({ user, x: r.right + 8, y: r.top });
-};

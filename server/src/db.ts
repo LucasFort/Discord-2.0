@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS reactions (
   created_at BIGINT NOT NULL,
   PRIMARY KEY (message_id, user_id, emoji)
 );
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -137,7 +147,12 @@ for (const col of PROFILE_COLUMNS) {
     /* já existe */
   }
 }
-for (const [table, col, type] of [['guilds', 'icon', 'TEXT'], ['channels', 'topic', 'TEXT']] as const) {
+for (const [table, col, type] of [
+  ['guilds', 'icon', 'TEXT'],
+  ['channels', 'topic', 'TEXT'],
+  ['messages', 'reply_to', 'TEXT'],
+  ['messages', 'pinned', 'INTEGER NOT NULL DEFAULT 0'],
+] as const) {
   try {
     await driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
   } catch {
@@ -177,12 +192,20 @@ export type User = {
 /** Status escolhido pela pessoa. "invisible" aparece como offline para os outros. */
 export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
 export type Guild = { id: string; name: string; owner_id: string; icon?: string | null };
-export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null };
+export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null };
 const USER_COLS = 'u.id, u.username, u.display_name, u.avatar, u.bio, u.pronouns, u.banner_color, u.custom_status';
+/** Arquivo anexado (o conteúdo fica no banco e é servido em /api/attachments/:id/:nome). */
+export type Attachment = { id: string; name: string; type: string; size: number; url: string };
+/** Resumo da mensagem respondida (aparece em cima da resposta). */
+export type ReplyRef = { id: string; author: User; content: string } | null;
 export type Message = {
   id: string;
   channel_id: string;
   content: string;
+  reply_to?: string | null;
+  reply?: ReplyRef;
+  pinned?: boolean;
+  attachments?: Attachment[];
   created_at: number;
   edited_at: number | null;
   author: User;
@@ -205,7 +228,26 @@ export const guildsOf = async (userId: string) =>
     userId,
   )) as Guild[];
 export const channelsOf = async (guildId: string) =>
-  (await all("SELECT * FROM channels WHERE guild_id = ? ORDER BY type = 'voice', position, name", guildId)) as Channel[];
+  (await all(
+    "SELECT c.*, (SELECT MAX(id) FROM messages WHERE channel_id = c.id) AS last_message_id FROM channels c WHERE c.guild_id = ? ORDER BY c.type = 'voice', c.position, c.name",
+    guildId,
+  )) as Channel[];
+
+/** Mensagens fixadas de um canal (mais nova primeiro). */
+export async function pinnedMessages(channelId: string): Promise<Message[]> {
+  const rows = await all(`${MESSAGE_SELECT} WHERE m.channel_id = ? AND m.pinned = 1 ORDER BY m.id DESC LIMIT 50`, channelId);
+  return withReactions(rows.map(rowToMessage));
+}
+
+/** Busca simples por texto nos canais de texto de um servidor (mais nova primeiro). */
+export async function searchMessages(guildId: string, q: string, limit = 25): Promise<Message[]> {
+  const like = `%${q.toLowerCase().replace(/[\\%_]/g, (c) => '\\' + c)}%`;
+  const rows = await all(
+    `${MESSAGE_SELECT} JOIN channels c ON c.id = m.channel_id WHERE c.guild_id = ? AND lower(m.content) LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT ?`,
+    guildId, like, limit,
+  );
+  return withReactions(rows.map(rowToMessage));
+}
 export const membersOf = async (guildId: string) =>
   (await all(
     `SELECT ${USER_COLS} FROM users u JOIN members m ON m.user_id = u.id WHERE m.guild_id = ? ORDER BY u.display_name`,
@@ -214,7 +256,7 @@ export const membersOf = async (guildId: string) =>
 export const memberIds = async (guildId: string) =>
   (await all('SELECT user_id FROM members WHERE guild_id = ?', guildId)).map((r) => r.user_id as string);
 
-const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at,
+const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.content, m.created_at, m.edited_at, m.reply_to, m.pinned,
        u.id AS author_id, u.username, u.display_name
 FROM messages m JOIN users u ON u.id = m.author_id`;
 
@@ -227,12 +269,30 @@ function rowToMessage(r: Row): Message {
     edited_at: r.edited_at ?? null,
     author: { id: r.author_id, username: r.username, display_name: r.display_name },
     reactions: [],
+    reply_to: r.reply_to ?? null,
+    pinned: !!Number(r.pinned ?? 0),
+    attachments: [],
   };
 }
 
-/** Preenche as reações de várias mensagens com uma consulta só. */
+/** Preenche reações, anexos e a mensagem respondida de várias mensagens com poucas consultas. */
 async function withReactions(msgs: Message[]): Promise<Message[]> {
   if (!msgs.length) return msgs;
+  const marks = msgs.map(() => '?').join(', ');
+  const att = await all(`SELECT id, message_id, name, type, size FROM attachments WHERE message_id IN (${marks}) ORDER BY id`, ...msgs.map((m) => m.id));
+  const byMsg = new Map(msgs.map((m) => [m.id, m]));
+  for (const a of att)
+    byMsg.get(a.message_id)!.attachments!.push({ id: a.id, name: a.name, type: a.type, size: Number(a.size), url: `/api/attachments/${a.id}/${encodeURIComponent(a.name)}` });
+  const replyIds = [...new Set(msgs.map((m) => m.reply_to).filter(Boolean) as string[])];
+  if (replyIds.length) {
+    const rows = await all(`${MESSAGE_SELECT} WHERE m.id IN (${replyIds.map(() => '?').join(', ')})`, ...replyIds);
+    const refs = new Map(rows.map((r) => [r.id as string, r]));
+    for (const m of msgs) {
+      if (!m.reply_to) continue;
+      const r = refs.get(m.reply_to);
+      m.reply = r ? { id: r.id, author: { id: r.author_id, username: r.username, display_name: r.display_name }, content: String(r.content).slice(0, 200) } : null;
+    }
+  }
   const rows = await all(
     `SELECT message_id, user_id, emoji FROM reactions WHERE message_id IN (${msgs.map(() => '?').join(', ')}) ORDER BY created_at`,
     ...msgs.map((m) => m.id),
