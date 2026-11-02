@@ -81,7 +81,7 @@ const DEFAULTS: Settings = {
   autoGainControl: true,
   autoBoost: true,
   strongNoiseSuppression: true,
-  maxNoiseSuppression: true,
+  maxNoiseSuppression: false, // duas passadas de IA deixam a voz metálica/robótica em muitos microfones
   keyboardFilter: 'normal',
   echoGate: true,
   echoStrength: 'strong',
@@ -134,9 +134,19 @@ const DEFAULTS: Settings = {
 
 const KEY = 'nexo.settings';
 
+/**
+ * Versão das configurações salvas. Sobe quando um padrão antigo se mostrou ruim e precisa ser
+ * trocado para quem já tinha o Nexo (a pessoa ainda pode escolher de novo depois).
+ * 2: supressão "Máxima" (IA duas vezes) deixava um barulho estranho/robótico na voz -> volta para "Forte".
+ */
+const VERSION = 2;
+
 function load(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings> & { _v?: number };
+    if ((saved._v ?? 1) < 2) saved.maxNoiseSuppression = false;
+    saved._v = VERSION;
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -180,9 +190,12 @@ export function useSettings() {
 export function micConstraints(s: Settings = current): AudioCaptureOptions {
   return {
     deviceId: s.inputDeviceId ? { ideal: s.inputDeviceId } : undefined, // 'ideal': se o aparelho sumiu, usa o padrão em vez de falhar
-    noiseSuppression: s.noiseSuppression,
+    // Com a IA (RNNoise) ligada, a supressão do navegador fica desligada: as duas juntas "brigam"
+    // e a voz sai com um chiado metálico, "embaixo d'água".
+    noiseSuppression: s.noiseSuppression && !s.strongNoiseSuppression,
     echoCancellation: s.echoCancellation,
-    autoGainControl: s.autoGainControl,
+    // A amplificação automática do Nexo já cuida do volume; com as duas juntas o volume "bombeia".
+    autoGainControl: s.autoGainControl && !s.autoBoost,
     // Pede o cancelamento de eco do sistema (melhor que o do navegador quando existe) e mono.
     ...(s.echoCancellation ? ({ echoCancellationType: 'system' } as object) : {}),
     channelCount: 1,

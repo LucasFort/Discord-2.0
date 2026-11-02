@@ -104,11 +104,12 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     rawAnalyser.smoothingTimeConstant = 0; // espectro do instante (com média, a voz que acabou "vaza" para as teclas logo depois)
     const boost = audioContext.createGain();
     const limiter = audioContext.createDynamicsCompressor();
-    limiter.threshold.value = -10;
-    limiter.knee.value = 4;
-    limiter.ratio.value = 12;
+    // Limitador suave: só segura os picos (grito, risada). Mais forte que isso "bombeia" a voz.
+    limiter.threshold.value = -6;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 8;
     limiter.attack.value = 0.003;
-    limiter.release.value = 0.2;
+    limiter.release.value = 0.25;
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
     const gate = audioContext.createGain();
@@ -287,7 +288,8 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     // Amplificação automática: leva a fala para perto de -24 dB, no máximo +30 dB.
     // Não mexe enquanto os outros falam, para não aumentar o eco junto.
     const wantBoost = s.autoBoost ? Math.max(0, Math.min(30, -24 - this.speechLevel)) : 0;
-    if (!echoRisk) this.boostDb += Math.max(-0.5, Math.min(0.5, wantBoost - this.boostDb));
+    // Muda devagar (até 5 dB por segundo): mudar rápido no meio da frase soa como volume "respirando".
+    if (!echoRisk) this.boostDb += Math.max(-0.1, Math.min(0.1, wantBoost - this.boostDb));
     this.boost!.gain.setTargetAtTime(10 ** (this.boostDb / 20), ctx.currentTime, 0.05);
 
     this.level = this.measure(this.analyser!, buf);
@@ -318,7 +320,7 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
       if (loud && now - this.lastVoiced < bridge) this.lastLoud = now;
       open = now - Math.max(this.lastLoud, this.lastVoiced) < (f?.hold ?? 400);
     }
-    if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.005 : 0.08);
+    if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.012 : 0.08);
     this.open = open;
   }
 
