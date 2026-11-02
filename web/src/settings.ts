@@ -13,6 +13,7 @@ export type Settings = {
   autoGainControl: boolean;
   autoBoost: boolean; // amplifica sozinho microfone baixo
   strongNoiseSuppression: boolean; // RNNoise (tira chiado e barulho de fundo)
+  echoGate: boolean; // segura o microfone enquanto os outros falam e o seu som é só eco
   inputMode: 'voice' | 'ptt';
   pttKey: string; // KeyboardEvent.code, ex.: 'KeyV'
   pttReleaseDelay: number; // ms
@@ -33,6 +34,7 @@ const DEFAULTS: Settings = {
   autoGainControl: true,
   autoBoost: true,
   strongNoiseSuppression: true,
+  echoGate: true,
   inputMode: 'voice',
   pttKey: '',
   pttReleaseDelay: 200,
@@ -85,6 +87,9 @@ export function micConstraints(s: Settings = current): AudioCaptureOptions {
     noiseSuppression: s.noiseSuppression,
     echoCancellation: s.echoCancellation,
     autoGainControl: s.autoGainControl,
+    // Pede o cancelamento de eco do sistema (melhor que o do navegador quando existe) e mono.
+    ...(s.echoCancellation ? ({ echoCancellationType: 'system' } as object) : {}),
+    channelCount: 1,
   };
 }
 

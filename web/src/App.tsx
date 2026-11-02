@@ -458,6 +458,12 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [stageStats, setStageStats] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
+  const [menu, setMenu] = useState<CallMenuState | null>(null);
+  const openMenu = (e: React.MouseEvent, user: VoiceUser, kind: CallMenuState['kind']) => {
+    if (user.isLocal) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, user, kind });
+  };
   const streams = voice.users.filter((u) => u.isSharing);
   const focused = streams.find((u) => u.identity === focus && u.screen);
 
@@ -468,7 +474,7 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
         {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
       </header>
       {focused ? (
-        <div className="stage">
+        <div className="stage" onContextMenu={(e) => openMenu(e, focused, 'stream')}>
           <VideoTrack track={focused.screen!} contain />
           {stageStats && <StreamStats track={focused.screen!} />}
           <div className="stage-bar">
@@ -481,10 +487,10 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
       ) : (
         <div className="grid">
           {streams.map((u) => (
-            <StreamTile key={`s-${u.identity}`} user={u} voice={voice} onFocus={() => setFocus(u.identity)} />
+            <StreamTile key={`s-${u.identity}`} user={u} voice={voice} onFocus={() => setFocus(u.identity)} onMenu={(e) => openMenu(e, u, 'stream')} />
           ))}
           {voice.users.map((u) => (
-            <div key={u.identity} className={`tile ${u.speaking ? 'speaking' : ''}`}>
+            <div key={u.identity} className={`tile ${u.speaking ? 'speaking' : ''}`} onContextMenu={(e) => openMenu(e, u, 'user')}>
               {u.camera ? <VideoTrack track={u.camera} mirror={u.isLocal} /> : <div className="tile-avatar">{initials(u.name)}</div>}
               <div className="tile-name">
                 {u.micMuted && <MicOff size={14} className="muted-icon" />}
@@ -546,6 +552,7 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
         <button className="round" title="Configurações de voz" onClick={onSettings}><SettingsIcon size={22} /></button>
         <button className="round danger" title="Desconectar" onClick={voice.leave}><PhoneOff size={22} /></button>
       </div>
+      {menu && <CallMenu menu={menu} voice={voice} onClose={() => setMenu(null)} onFullscreen={() => setFocus(menu.user.identity)} />}
       {shareOpen && (
         <ShareDialog
           onClose={() => setShareOpen(false)}
@@ -559,11 +566,11 @@ function VoiceView({ voice, channelName, onSettings }: { voice: Voice; channelNa
   );
 }
 
-function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; onFocus: () => void }) {
+function StreamTile({ user, voice, onFocus, onMenu }: { user: VoiceUser; voice: Voice; onFocus: () => void; onMenu: (e: React.MouseEvent) => void }) {
   const [stats, setStats] = useState(false);
   if (!user.watching || !user.screen) {
     return (
-      <div className="tile stream">
+      <div className="tile stream" onContextMenu={onMenu}>
         <div className="stream-cta">
           <span className="live">AO VIVO</span>
           <p>{user.name} está transmitindo</p>
@@ -573,7 +580,7 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
     );
   }
   return (
-    <div className="tile stream" onDoubleClick={onFocus}>
+    <div className="tile stream" onDoubleClick={onFocus} onContextMenu={onMenu} title={user.isLocal ? undefined : 'Botão direito: volume da transmissão'}>
       <VideoTrack track={user.screen} contain />
       {stats && <StreamStats track={user.screen} />}
       <div className="tile-name">
@@ -585,7 +592,73 @@ function StreamTile({ user, voice, onFocus }: { user: VoiceUser; voice: Voice; o
           {!user.isLocal && <button className="icon small" title="Parar de assistir" onClick={() => voice.setWatch(user.identity, false)}><X size={16} /></button>}
         </span>
       </div>
-      {!user.isLocal && <StreamVolume identity={user.identity} className="tile-volume" />}
+    </div>
+  );
+}
+
+type CallMenuState = { x: number; y: number; user: VoiceUser; kind: 'stream' | 'user' };
+
+/** Menu do botão direito numa transmissão ou numa pessoa da call: volume, silenciar, parar de assistir. */
+function CallMenu({ menu, voice, onClose, onFullscreen }: { menu: CallMenuState; voice: Voice; onClose: () => void; onFullscreen: () => void }) {
+  const settings = useSettings();
+  const ref = useRef<HTMLDivElement>(null);
+  const { user, kind } = menu;
+  const key = kind === 'stream' ? 'streamVolumes' : 'userVolumes';
+  const vol = settings[key][user.identity] ?? 100;
+  const set = (v: number) => updateSettings({ [key]: { ...settings[key], [user.identity]: v } });
+  // Guarda o volume de antes de silenciar, para o "Ativar som" voltar nele.
+  const before = useRef(vol || 100);
+
+  useEffect(() => {
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node)) onClose();
+    };
+    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('keydown', close);
+    window.addEventListener('resize', onClose);
+    return () => {
+      window.removeEventListener('pointerdown', close, true);
+      window.removeEventListener('keydown', close);
+      window.removeEventListener('resize', onClose);
+    };
+  }, [onClose]);
+
+  // Não deixa o menu sair da tela.
+  const [pos, setPos] = useState({ left: menu.x, top: menu.y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: Math.max(8, Math.min(menu.x, innerWidth - r.width - 8)), top: Math.max(8, Math.min(menu.y, innerHeight - r.height - 8)) });
+  }, [menu.x, menu.y]);
+
+  return (
+    <div className="call-menu" ref={ref} style={pos} onContextMenu={(e) => e.preventDefault()}>
+      <div className="call-menu-title">{kind === 'stream' ? `Transmissão de ${user.name}` : user.name}</div>
+      <label className="call-menu-volume">
+        <span>{kind === 'stream' ? 'Volume da transmissão' : 'Volume do usuário'} · {vol}%</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={vol}
+          autoFocus
+          onChange={(e) => {
+            const v = +e.target.value;
+            if (v > 0) before.current = v;
+            set(v);
+          }}
+        />
+      </label>
+      <button onClick={() => set(vol === 0 ? before.current : 0)}>
+        {vol === 0 ? <Volume2 size={16} /> : <VolumeX size={16} />} {vol === 0 ? 'Ativar som' : kind === 'stream' ? 'Silenciar transmissão' : 'Silenciar usuário'}
+      </button>
+      {kind === 'stream' && user.watching && (
+        <>
+          <button onClick={() => (onFullscreen(), onClose())}><Expand size={16} /> Ampliar</button>
+          <button onClick={() => (voice.setWatch(user.identity, false), onClose())}><X size={16} /> Parar de assistir</button>
+        </>
+      )}
     </div>
   );
 }

@@ -250,6 +250,12 @@ function VoiceSettings() {
       />
       <Toggle label="Supressão de ruído do navegador" hint="A supressão básica do navegador. Pode deixar ligada junto com a forte." checked={s.noiseSuppression} onChange={(v) => updateSettings({ noiseSuppression: v })} />
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
+      <Toggle
+        label="Supressão de eco extra"
+        hint="Enquanto outra pessoa fala, o microfone só abre com a sua voz de verdade. Tira o eco que sobra quando alguém usa caixa de som."
+        checked={s.echoGate}
+        onChange={(v) => updateSettings({ echoGate: v })}
+      />
       <Toggle label="Controle automático de ganho" hint="Ajusta o volume do microfone sozinho." checked={s.autoGainControl} onChange={(v) => updateSettings({ autoGainControl: v })} />
     </>
   );

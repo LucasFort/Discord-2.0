@@ -274,7 +274,12 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 .tile-volume { position: absolute; top: 10px; right: 10px; display: none; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(0, 0, 0, .6); color: white; font-size: 12px; }
 .tile-volume input { width: 90px; }
 .tile:hover .tile-volume { display: flex; }
-.tile.stream .tile-volume { top: 10px; left: 10px; right: auto; }
+.call-menu { position: fixed; z-index: 30; min-width: 230px; display: flex; flex-direction: column; gap: 2px; padding: 6px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); animation: msg-in .1s ease-out; }
+.call-menu-title { padding: 6px 10px 4px; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-menu-volume { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 10px; font-size: 13px; color: var(--text-strong); }
+.call-menu-volume input { width: 100%; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+.call-menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+.call-menu button:hover { background: var(--accent); color: white; }
 .stage-volume { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .stage-volume input { width: 100px; }
 .tile-volume .icon, .stage-volume .icon { color: inherit; padding: 2px; }
