@@ -178,3 +178,13 @@ export function StatusMenu({ user, status, onClose, onEditProfile }: { user: Use
     </div>
   );
 }
+
+/** Abre o cartão de perfil de alguém perto do elemento clicado (o App registra quem mostra). */
+export type ProfileOpen = { user: User; x: number; y: number };
+let openProfileFn: ((p: ProfileOpen | null) => void) | null = null;
+export const setProfileOpener = (fn: ((p: ProfileOpen | null) => void) | null) => void (openProfileFn = fn);
+export const openProfile = (user: User, e: React.MouseEvent) => {
+  e.stopPropagation();
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openProfileFn?.({ user, x: r.right + 8, y: r.top });
+};

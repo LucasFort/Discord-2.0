@@ -14,7 +14,7 @@ export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
 /** O que aparece para os outros (bolinha ao lado da foto). */
 export type Presence = 'online' | 'idle' | 'dnd' | 'offline';
 export const STATUS_LABELS: Record<UserStatus, string> = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' };
-export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null };
+export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null };
 export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; channels: Channel[]; members: User[] };
 export type Message = {
   id: string;
@@ -24,11 +24,15 @@ export type Message = {
   edited_at: number | null;
   author: User;
   reactions?: Reaction[];
+  reply_to?: string | null;
+  reply?: { id: string; author: User; content: string } | null;
+  pinned?: boolean;
+  attachments?: Attachment[];
 };
+export type Attachment = { id: string; name: string; type: string; size: number; url: string };
+/** Endereço completo de um anexo (a API pode estar em outro domínio). */
+export const fileUrl = (url: string) => `${API_URL}${url}`;
 export type Reaction = { emoji: string; user_ids: string[] };
-
-/** Emojis das reações (o servidor aceita só estes). */
-export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
 
 /** Nome do app: troque à vontade, só evite marcas de terceiros. */
 export const APP_NAME = 'Nexo';

@@ -7,8 +7,12 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Cadastro e login (senha com bcrypt, sessão por JWT, limite de 10 tentativas por minuto)
 - Criar servidor (já vem com `#geral` e o canal de voz `Geral`), convidar por link (`/convite/CODIGO`, válido por 7 dias) e entrar com convite
 - Canais de texto e de voz (só o dono do servidor cria canais por enquanto)
-- Chat em tempo real: enviar, editar, apagar, histórico com rolagem infinita, "fulano está digitando", markdown básico (`**negrito**`, `*itálico*`, `` `código` ``, `||spoiler||`, links)
-- Reações nas mensagens (👍 ❤️ 😂 😮 😢 🔥 🎉 👀), com a lista de quem reagiu ao passar o mouse
+- Chat em tempo real: enviar, editar (↑ edita a última), apagar, histórico com rolagem infinita, "fulano está digitando", Shift+Enter para nova linha, rascunho por canal, markdown (`**negrito**`, `*itálico*`, `__sublinhado__`, `~~riscado~~`, `` `código` ``, blocos ```` ``` ````, `||spoiler||`, links)
+- **Responder** a uma mensagem (com a citação clicável), **anexos** (botão +, colar ou arrastar; até 4 arquivos de 8 MB; imagens e vídeos aparecem no chat, imagem amplia ao clicar), prévia de links de imagem
+- **@menções** com autocompletar (`@usuario` e `@todos`), destaque de quem foi mencionado
+- **Emojis**: seletor com busca e recentes, na mensagem e nas reações (qualquer emoji); reações rápidas ao passar o mouse
+- **Fixar mensagens** (autor ou dono) e painel de fixadas; **busca** de mensagens no servidor
+- **Não lidas**: canal em negrito, contador vermelho de menções no canal e no ícone do servidor, linha "NOVAS" ao abrir o canal
 - Sons: entrada e saída na call, mutar e desmutar, mensagem nova com a aba em segundo plano (o sino na barra do usuário desliga)
 - Avisos na tela ("fulano entrou na call") e emojis que sobem flutuando na call para todo mundo
 - Lista de membros online e offline

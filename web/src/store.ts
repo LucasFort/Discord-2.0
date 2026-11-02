@@ -4,6 +4,7 @@ import { checkForUpdate } from './update';
 import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Presence, type User, type UserStatus } from './api';
 import { startIdleWatch } from './activity';
 import { notifyMessage, setMe } from './notify';
+import { noteMessage } from './unread';
 
 export type State = {
   ready: boolean;
@@ -153,6 +154,8 @@ function reducer(s: State, a: Action): State {
       return { ...s, messages: { ...s.messages, [a.d.channel_id]: merged } };
     }
     case 'MESSAGE_CREATE': {
+      const chId = a.d.channel_id;
+      s = { ...s, guilds: s.guilds.map((g) => (g.channels.some((c) => c.id === chId) ? { ...g, channels: g.channels.map((c) => (c.id === chId ? { ...c, last_message_id: a.d.id } : c)) } : g)) };
       const cur = s.messages[a.d.channel_id];
       if (!cur || cur.some((m) => m.id === a.d.id)) return s; // canal ainda não carregado: busca ao abrir
       const typing = { ...s.typing[a.d.channel_id] };
@@ -226,6 +229,7 @@ export function useStore(onUnauthorized: () => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const meRef = useRef<string | null>(null);
   const statusRef = useRef<UserStatus>('online');
+  const meUser = useRef<User | null>(null);
   const [failures, setFailures] = useState(0); // tentativas seguidas sem conseguir conectar
 
   useEffect(() => {
@@ -243,12 +247,16 @@ export function useStore(onUnauthorized: () => void) {
         try {
           const msg = JSON.parse(e.data);
           if (!msg?.t || msg.t === 'PONG') return;
-          if (msg.t === 'READY' || (msg.t === 'USER_UPDATE' && msg.d.id === meRef.current)) setMe(msg.d.user ?? msg.d);
+          if (msg.t === 'READY' || (msg.t === 'USER_UPDATE' && msg.d.id === meRef.current)) {
+            meUser.current = msg.t === 'READY' ? msg.d.user : { ...meUser.current, ...msg.d };
+            setMe(meUser.current!);
+          }
           if (msg.t === 'READY') {
             meRef.current = msg.d.user.id;
             statusRef.current = msg.d.status ?? 'online';
           }
           if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
+          if (msg.t === 'MESSAGE_CREATE') noteMessage(msg.d, meUser.current);
           // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
           // "Não perturbe" silencia os dois, como no Discord.
           if (msg.t === 'MESSAGE_CREATE' && msg.d.author?.id !== meRef.current && statusRef.current !== 'dnd') {
