@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { playSound } from './sounds';
+import { checkForUpdate } from './update';
 import { gatewayUrl, getToken, type Channel, type Guild, type Message, type User } from './api';
 
 export type State = {
@@ -150,6 +151,8 @@ export function useStore(onUnauthorized: () => void) {
     const connect = () => {
       const ws = new WebSocket(gatewayUrl(getToken() ?? ''));
       wsRef.current = ws;
+      // Voltou depois de cair (o servidor reinicia a cada deploy): confere se saiu versão nova.
+      if (retry > 0) ws.addEventListener('open', () => void checkForUpdate(), { once: true });
       ws.onmessage = (e) => {
         retry = 0;
         setFailures(0);
