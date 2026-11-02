@@ -41,6 +41,13 @@ const dB = (rms: number) => Math.max(-100, Math.min(0, 20 * Math.log10(rms || 1e
  * A sensibilidade automática acompanha o ruído de fundo de cada microfone, então
  * funciona tanto em microfone alto quanto em microfone muito baixo.
  */
+/** Filtro de teclado e mouse: quanto o som precisa parecer voz para abrir o microfone. */
+const KEY_FILTER: Record<string, { share: number; flat: number; ticks: number; hold: number } | null> = {
+  off: null,
+  normal: { share: 0.58, flat: 0.33, ticks: 3, hold: 330 },
+  strong: { share: 0.6, flat: 0.3, ticks: 3, hold: 280 },
+};
+
 export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
   name = 'nexo-mic';
   processedTrack?: MediaStreamTrack;
@@ -66,7 +73,8 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
   private lastSpeech = 0;
   private denoise: AudioNode | null = null;
   private denoise2: AudioNode | null = null; // segunda passada do RNNoise (supressão máxima)
-  private openTicks = 0; // ticks seguidos com cara de voz (abre o portão só depois de 2)
+  private openTicks = 0; // ticks seguidos com cara de voz (o portão só abre depois de alguns)
+  private lastVoiced = 0; // último instante com som de voz de verdade (mantém o portão aberto)
   private freqBuf?: Float32Array<ArrayBuffer>;
   private pre?: AudioNode; // fim da etapa de filtros (antes do RNNoise)
   private post?: AudioNode; // começo da etapa depois do RNNoise
@@ -90,6 +98,7 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     const post = audioContext.createGain();
     const rawAnalyser = audioContext.createAnalyser();
     rawAnalyser.fftSize = 1024;
+    rawAnalyser.smoothingTimeConstant = 0; // espectro do instante (com média, a voz que acabou "vaza" para as teclas logo depois)
     const boost = audioContext.createGain();
     const limiter = audioContext.createDynamicsCompressor();
     limiter.threshold.value = -10;
@@ -109,9 +118,14 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     post.connect(boost);
     boost.connect(limiter);
     limiter.connect(analyser);
-    limiter.connect(gate);
+    // Atraso de 60 ms antes do portão: dá tempo de confirmar que é voz (e não tecla) sem cortar
+    // o começo da primeira palavra.
+    const delay = audioContext.createDelay(0.2);
+    delay.delayTime.value = 0.06;
+    limiter.connect(delay);
+    delay.connect(gate);
     gate.connect(dest);
-    this.nodes = [src, gain, highpass, lowpass, post, rawAnalyser, boost, limiter, analyser, gate, dest];
+    this.nodes = [src, gain, highpass, lowpass, post, rawAnalyser, boost, limiter, analyser, delay, gate, dest];
     this.pre = lowpass;
     this.post = post;
     this.denoise = await createRnnoise(audioContext);
@@ -157,22 +171,37 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
   private wantMax = false;
 
   /**
-   * Parte da energia que está na faixa da voz (150 a 3.400 Hz). Fala fica bem acima de 0,6;
-   * clique de teclado, mouse, batida na mesa e chiado espalham energia pelos agudos e ficam abaixo.
+   * Como é o som agora, pelo espectro:
+   * - share: parte da energia na faixa da voz (150 a 3.400 Hz). Fala fica acima de 0,6; clique,
+   *   batida e chiado espalham energia pelos agudos.
+   * - flat: "planura" do espectro entre 100 e 2.000 Hz (0 = só picos, 1 = ruído chiado). A voz é
+   *   feita de harmônicos (picos bem marcados) e fica baixa; tecla, mouse e batida são estalos
+   *   sem tom e ficam altos, mesmo quando caem na mesma faixa da voz.
    */
-  private voiceShare() {
+  private spectrum() {
     const a = this.rawAnalyser!;
     this.freqBuf ??= new Float32Array(a.frequencyBinCount);
     a.getFloatFrequencyData(this.freqBuf);
     const hz = this.ctx!.sampleRate / a.fftSize;
     let voice = 0;
     let total = 0;
-    for (let i = Math.floor(150 / hz); i < this.freqBuf.length && i * hz < 11000; i++) {
-      const e = 10 ** (this.freqBuf[i] / 10);
-      total += e;
-      if (i * hz <= 3400) voice += e;
+    let logSum = 0;
+    let linSum = 0;
+    let n = 0;
+    for (let i = Math.max(1, Math.floor(100 / hz)); i < this.freqBuf.length && i * hz < 11000; i++) {
+      const db = Math.max(-160, this.freqBuf[i]);
+      const e = 10 ** (db / 10);
+      if (i * hz >= 150) {
+        total += e;
+        if (i * hz <= 3400) voice += e;
+      }
+      if (i * hz <= 2000) {
+        logSum += (db / 10) * Math.LN10;
+        linSum += e;
+        n++;
+      }
     }
-    return total > 0 ? voice / total : 0;
+    return { share: total > 0 ? voice / total : 0, flat: n && linSum > 0 ? Math.exp(logSum / n) / (linSum / n) : 1 };
   }
 
   // ---------- Eco ----------
@@ -266,13 +295,24 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
       open = now - this.lastPtt <= s.pttReleaseDelay;
     } else {
       const loud = s.autoSensitivity ? speaking : this.level > s.sensitivity;
-      // Para abrir o portão o som precisa parecer voz por 40 ms seguidos: estalo, clique e batida
-      // são curtos ou espalhados nos agudos e não abrem. Com o portão aberto, só o volume conta
-      // (assim o "s" e o fim das palavras não são cortados).
-      const wasOpen = now - this.lastLoud < 400;
-      this.openTicks = loud && (wasOpen || s.strongNoiseSuppression === false || this.voiceShare() > 0.6) ? this.openTicks + 1 : 0;
-      if (loud && (wasOpen || this.openTicks >= 2)) this.lastLoud = now;
-      open = now - this.lastLoud < 400; // segura um pouco para não cortar o fim das palavras
+      // Filtro de teclado e mouse: o portão só abre com som que parece voz (harmônicos na faixa
+      // da voz) por alguns ticks seguidos, e só continua aberto enquanto a voz continua. Teclas
+      // apertadas no meio da fala não seguram o microfone aberto depois que você para de falar.
+      const f = s.keyboardFilter in KEY_FILTER ? KEY_FILTER[s.keyboardFilter] : KEY_FILTER.normal;
+      let voiced = loud;
+      if (loud && f) {
+        const sp = this.spectrum();
+        voiced = sp.share > f.share && sp.flat < f.flat;
+      }
+      this.openTicks = voiced ? this.openTicks + 1 : 0;
+      const wasOpen = now - this.lastVoiced < (f?.hold ?? 400);
+      // Para continuar aberto também precisa de voz em 2 ticks seguidos: uma tecla isolada que por
+      // acaso pareça voz não emenda o portão aberto.
+      if (voiced && this.openTicks >= (f ? (wasOpen ? 2 : f.ticks) : 1)) this.lastVoiced = now;
+      // Com o portão aberto, som alto sem cara de voz (o "s", o "f", fim de palavra) também segura,
+      // mas só por pouco tempo: um "s" dura menos de 150 ms, uma sequência de teclas dura mais.
+      if (loud && wasOpen && now - this.lastVoiced < 150) this.lastLoud = now;
+      open = now - Math.max(this.lastLoud, this.lastVoiced) < (f?.hold ?? 400);
     }
     if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.005 : 0.05);
     this.open = open;

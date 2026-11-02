@@ -276,6 +276,30 @@ function VoiceSettings() {
       </div>
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />
       <div className="field">
+        <span>Filtro de teclado e mouse</span>
+        <div className="options">
+          {(
+            [
+              ['off', 'Desligado'],
+              ['normal', 'Normal'],
+              ['strong', 'Forte'],
+            ] as const
+          ).map(([v, label]) => (
+            <button key={v} className={`option ${s.keyboardFilter === v ? 'selected' : ''}`} onClick={() => updateSettings({ keyboardFilter: v })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <small className="muted">
+          {s.keyboardFilter === 'off'
+            ? 'O microfone abre com qualquer som alto.'
+            : s.keyboardFilter === 'strong'
+              ? 'O microfone só abre com a sua voz: digitar, clicar, bater na mesa e mexer no mouse não passam, nem logo depois de você falar.'
+              : 'Ignora a maior parte das teclas e cliques. Use se o Forte cortar o começo das suas frases.'}
+          {' '}Teste em "Vamos verificar": a barra só fica verde quando você fala.
+        </small>
+      </div>
+      <div className="field">
         <span>Proteção contra retorno</span>
         <div className="options">
           {(
