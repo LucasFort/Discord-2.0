@@ -37,6 +37,15 @@ function tone(freq: number, start: number, dur: number, volume = 0.12, type: Osc
   osc.stop(t + dur + 0.05);
 }
 
+/** Três notas em sequência, a última mais longa: o som de alguém entrando ou saindo da call. */
+function chime(notes: number[]) {
+  notes.forEach((f, i) => {
+    const last = i === notes.length - 1;
+    tone(f, i * 0.09, last ? 0.42 : 0.16, 0.3);
+    tone(f, i * 0.09, last ? 0.35 : 0.14, 0.12, 'triangle');
+  });
+}
+
 export type SoundName =
   | 'join' | 'leave' | 'disconnect' | 'mute' | 'unmute' | 'deafen' | 'undeafen'
   | 'ptt_on' | 'ptt_off' | 'stream_start' | 'stream_end' | 'message' | 'reaction';
@@ -66,13 +75,13 @@ export function playSound(name: SoundName) {
     vol = Math.max(0, Math.min(1, s.soundVolume / 100));
     if (vol === 0) return;
     switch (name) {
+      // Entrar e sair: mais altos (cerca de 2,5x) e com três notas, para dar para ouvir mesmo
+      // com jogo ou transmissão tocando. O "triangle" por baixo deixa o som mais cheio.
       case 'join':
-        tone(523.25, 0, 0.18); // dó
-        tone(783.99, 0.1, 0.28); // sol
+        chime([523.25, 659.25, 1046.5]); // dó, mi, dó agudo: subindo
         break;
       case 'leave':
-        tone(783.99, 0, 0.18);
-        tone(392, 0.1, 0.3);
+        chime([783.99, 587.33, 392]); // sol, ré, sol grave: descendo
         break;
       case 'mute':
         tone(440, 0, 0.09, 0.08, 'triangle');
