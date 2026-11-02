@@ -1,4 +1,4 @@
-// Ponte entre o site do Nexo e o app de computador: atalhos globais de mutar e ensurdecer.
+// Ponte entre o site do Nexo e o app de computador: atalhos globais e som do sistema para a transmissão.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('nexoDesktop', {
@@ -9,5 +9,16 @@ contextBridge.exposeInMainWorld('nexoDesktop', {
     const fn = (_e, name) => cb(name);
     ipcRenderer.on('shortcut', fn);
     return () => ipcRenderer.removeListener('shortcut', fn);
+  },
+  /** Som do computador sem o som do próprio Nexo (Windows 11). PCM 16 bits, estéreo, 48 kHz. */
+  systemAudio: {
+    available: () => ipcRenderer.invoke('sysaudio:available'),
+    start: () => ipcRenderer.invoke('sysaudio:start'),
+    stop: () => ipcRenderer.invoke('sysaudio:stop'),
+    onChunk: (cb) => {
+      const fn = (_e, chunk) => cb(chunk);
+      ipcRenderer.on('sysaudio:chunk', fn);
+      return () => ipcRenderer.removeListener('sysaudio:chunk', fn);
+    },
   },
 });

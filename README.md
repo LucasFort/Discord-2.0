@@ -24,9 +24,10 @@ Testado ponta a ponta com dois navegadores: chat, voz e transmissão 1080p chega
 
 O app (pasta `desktop/`, feito em Electron) abre o Nexo numa janela própria e adiciona:
 - seletor de tela ou janela com miniaturas na hora de transmitir;
-- áudio do computador na transmissão (Windows);
+- áudio do computador na transmissão (Windows). No Windows 11 o som do próprio Nexo fica de fora (captura por processo, pacote `loopback-capture`), então quem assiste não ouve a própria voz de volta;
 - links externos abrindo no navegador;
-- atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco).
+- atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco);
+- atualização automática (`electron-updater`): a partir da 0.1.3 o app baixa a versão nova sozinho da última release e pergunta se pode reiniciar.
 
 **Para baixar:** https://github.com/LucasFort/Discord-2.0/releases/latest (Windows `.exe`, Linux `.AppImage`). Mande esse link para os amigos.
 
@@ -101,4 +102,4 @@ web/src/
 
 ## Próximos passos (fase 2 do roadmap)
 
-Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, atualização automática do app de computador, versão para Mac.
+Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, versão para Mac.

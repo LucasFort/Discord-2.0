@@ -1,7 +1,7 @@
 {
   "name": "nexo-desktop",
   "productName": "Nexo",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "App para computador do Nexo: voz, chat e transmissão de tela com os amigos.",
   "author": "Lucas",
   "license": "UNLICENSED",
@@ -12,6 +12,12 @@
     "start": "electron .",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "optionalDependencies": {
+    "loopback-capture": "4.0.0"
   },
   "devDependencies": {
     "electron": "^33.4.11",
@@ -66,12 +72,14 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "LucasFort",
-        "repo": "Discord-2.0",
-        "releaseType": "release"
+        "provider": "generic",
+        "url": "https://github.com/LucasFort/Discord-2.0/releases/latest/download"
       }
-    ]
+    ],
+    "asarUnpack": [
+      "node_modules/loopback-capture/**"
+    ],
+    "npmRebuild": false
   },
   "repository": {
     "type": "git",

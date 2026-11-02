@@ -5,9 +5,13 @@
  * - áudio do sistema na transmissão (Windows);
  * - links externos abrem no navegador padrão;
  * - uma janela só (abrir de novo traz a janela existente para a frente);
- * - atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco).
+ * - atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco);
+ * - som do computador na transmissão SEM o som do próprio Nexo (Windows 11), para quem assiste
+ *   não ouvir a própria voz de volta;
+ * - atualização automática (baixa a versão nova sozinho e pergunta se pode reiniciar).
  */
-const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, session, shell } = require('electron');
+const os = require('node:os');
 const path = require('node:path');
 
 const APP_URL = process.env.NEXO_URL || require('./package.json').nexoUrl;
@@ -42,7 +46,12 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload-main.cjs'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
   win.loadURL(APP_URL);
-  win.on('closed', () => (win = null));
+  win.on('closed', () => {
+    win = null;
+    stopSystemAudio();
+  });
+  // Página recarregou (atualização do site): a captura antiga não tem mais quem a ouça.
+  win.webContents.on('did-start-navigation', (d) => d.isMainFrame && !d.isSameDocument && stopSystemAudio());
 
   // Links de fora do Nexo abrem no navegador.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -118,7 +127,95 @@ ipcMain.handle('shortcuts:set', (e, keys) => {
   }
   return result;
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  stopSystemAudio();
+});
+
+const fromNexo = (e) => !!win && e.sender === win.webContents && e.sender.getURL().startsWith(APP_ORIGIN);
+
+// Som do computador para a transmissão, tirando o som do Nexo (vozes da call e transmissões
+// dos outros). Usa a captura por processo do Windows (WASAPI "exclude process tree"), que só
+// existe a partir do build 20348 (Windows 11). Sem ela o site usa a captura normal do Electron.
+let LoopbackCapture;
+function loadLoopback() {
+  if (LoopbackCapture !== undefined) return LoopbackCapture;
+  LoopbackCapture = null;
+  const build = Number(os.release().split('.')[2] || 0);
+  if (process.platform !== 'win32' || process.arch !== 'x64' || build < 20348) return null;
+  try {
+    LoopbackCapture = require('loopback-capture').LoopbackCapture;
+  } catch (err) {
+    console.error('loopback-capture indisponível', err);
+  }
+  return LoopbackCapture;
+}
+let capture = null;
+function stopSystemAudio() {
+  if (!capture) return;
+  try {
+    capture.stop();
+  } catch {}
+  capture = null;
+}
+ipcMain.handle('sysaudio:available', (e) => fromNexo(e) && !!loadLoopback());
+ipcMain.handle('sysaudio:start', (e) => {
+  if (!fromNexo(e) || !loadLoopback()) return false;
+  stopSystemAudio();
+  const target = e.sender;
+  try {
+    const c = new LoopbackCapture();
+    // process.pid = este processo e todos os filhos (janela, áudio da call): tudo do Nexo fica de fora.
+    c.startSystemAudio((chunk) => {
+      if (capture === c && !target.isDestroyed()) target.send('sysaudio:chunk', chunk);
+    }, process.pid);
+    capture = c;
+    return true;
+  } catch (err) {
+    console.error('Falha ao capturar o som do sistema', err);
+    stopSystemAudio();
+    return false;
+  }
+});
+ipcMain.handle('sysaudio:stop', (e) => {
+  if (fromNexo(e)) stopSystemAudio();
+});
+
+// Atualização automática: confere ao abrir e a cada 2 horas; a versão nova é baixada em segundo
+// plano e instalada ao reiniciar (ou ao fechar o app, se a pessoa escolher "Depois").
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (err) {
+    return console.error('electron-updater indisponível', err);
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (err) => console.error('Atualização falhou', err?.message || err));
+  let asked = false;
+  autoUpdater.on('update-downloaded', async (info) => {
+    if (asked) return;
+    asked = true;
+    const { response } = await dialog.showMessageBox(win ?? undefined, {
+      type: 'info',
+      title: 'Atualização do Nexo',
+      message: `A versão ${info.version} do Nexo foi baixada.`,
+      detail: 'Reiniciar agora para atualizar? Se escolher "Depois", ela é instalada quando você fechar o app.',
+      buttons: ['Reiniciar agora', 'Depois'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      stopSystemAudio();
+      autoUpdater.quitAndInstall();
+    }
+  });
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  check();
+  setInterval(check, 2 * 60 * 60 * 1000);
+}
 
 app.whenReady().then(() => {
   const ses = session.defaultSession;
@@ -152,6 +249,7 @@ app.whenReady().then(() => {
   );
 
   createWindow();
+  setupAutoUpdate();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 
