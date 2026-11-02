@@ -38,7 +38,7 @@ function feedRemoteAudio(room: Room) {
 }
 
 /** O microfone só passa pelo processamento quando alguma opção precisa dele. */
-const needsMicProcessor = (s: Settings) => s.echoGate || s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
+const needsMicProcessor = (s: Settings) => s.echoGate || s.keyboardFilter !== 'off' || s.autoBoost || s.strongNoiseSuppression || s.inputMode === 'ptt' || !s.autoSensitivity || s.inputVolume !== 100;
 
 /**
  * Volume final de cada áudio: volume geral × volume da pessoa (voz) ou da transmissão dela

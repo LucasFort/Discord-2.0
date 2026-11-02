@@ -14,6 +14,7 @@ export type Settings = {
   autoBoost: boolean; // amplifica sozinho microfone baixo
   strongNoiseSuppression: boolean; // RNNoise (tira chiado e barulho de fundo)
   maxNoiseSuppression: boolean; // RNNoise duas vezes (corta até teclado e gente falando longe)
+  keyboardFilter: 'off' | 'normal' | 'strong'; // não deixa tecla, mouse e batida abrirem o microfone
   echoGate: boolean; // segura o microfone enquanto os outros falam e o seu som é só eco
   echoStrength: 'normal' | 'strong' | 'max'; // quão rígido o microfone fica enquanto toca som da call (voz, vídeo, transmissão)
   inputMode: 'voice' | 'ptt';
@@ -53,6 +54,7 @@ const DEFAULTS: Settings = {
   autoBoost: true,
   strongNoiseSuppression: true,
   maxNoiseSuppression: true,
+  keyboardFilter: 'strong',
   echoGate: true,
   echoStrength: 'strong',
   inputMode: 'voice',
