@@ -9,7 +9,23 @@ import { getChannel, guildPayload, guildsOf, isMember, memberIds, type User } fr
  * Client -> server: { op: 'typing' | 'voice_state' | 'ping', ... }
  */
 const sockets = new Map<string, Set<WebSocket>>(); // userId -> sockets
-const voiceStates = new Map<string, { userId: string; channelId: string; guildId: string }>(); // userId -> state
+type VoiceFlags = { self_mute: boolean; self_deaf: boolean; self_stream: boolean; self_video: boolean };
+const NO_FLAGS: VoiceFlags = { self_mute: false, self_deaf: false, self_stream: false, self_video: false };
+const voiceStates = new Map<string, { userId: string; channelId: string; guildId: string } & VoiceFlags>(); // userId -> state
+
+/** Só aceita os quatro indicadores, como booleanos (o resto da mensagem é ignorado). */
+function readFlags(msg: Record<string, unknown>): VoiceFlags {
+  return { self_mute: !!msg.self_mute, self_deaf: !!msg.self_deaf, self_stream: !!msg.self_stream, self_video: !!msg.self_video };
+}
+const voicePayload = (v: { userId: string; guildId: string; channelId: string } & VoiceFlags) => ({
+  user_id: v.userId,
+  guild_id: v.guildId,
+  channel_id: v.channelId,
+  self_mute: v.self_mute,
+  self_deaf: v.self_deaf,
+  self_stream: v.self_stream,
+  self_video: v.self_video,
+});
 
 export function sendToUser(userId: string, t: string, d: unknown) {
   const msg = JSON.stringify({ t, d });
@@ -27,8 +43,14 @@ async function broadcastPresence(user: User) {
   for (const g of await guildsOf(user.id)) await sendToGuild(g.id, 'PRESENCE_UPDATE', { user_id: user.id, status });
 }
 
-async function setVoiceState(user: User, channelId: string | null) {
+async function setVoiceState(user: User, channelId: string | null, flags: VoiceFlags = NO_FLAGS) {
   const prev = voiceStates.get(user.id);
+  // Mesmo canal: só mudou mutado, ensurdecido, transmitindo ou câmera.
+  if (prev && channelId && prev.channelId === channelId) {
+    Object.assign(prev, flags);
+    await sendToGuild(prev.guildId, 'VOICE_STATE_UPDATE', voicePayload(prev));
+    return;
+  }
   if (prev) {
     voiceStates.delete(user.id);
     await sendToGuild(prev.guildId, 'VOICE_STATE_UPDATE', { user_id: user.id, guild_id: prev.guildId, channel_id: null });
@@ -36,8 +58,9 @@ async function setVoiceState(user: User, channelId: string | null) {
   if (!channelId) return;
   const ch = await getChannel(channelId);
   if (!ch || ch.type !== 'voice' || !(await isMember(ch.guild_id, user.id))) return;
-  voiceStates.set(user.id, { userId: user.id, channelId, guildId: ch.guild_id });
-  await sendToGuild(ch.guild_id, 'VOICE_STATE_UPDATE', { user_id: user.id, guild_id: ch.guild_id, channel_id: channelId });
+  const state = { userId: user.id, channelId, guildId: ch.guild_id, ...flags };
+  voiceStates.set(user.id, state);
+  await sendToGuild(ch.guild_id, 'VOICE_STATE_UPDATE', voicePayload(state));
 }
 
 export function registerGateway(app: FastifyInstance) {
@@ -69,7 +92,7 @@ export function registerGateway(app: FastifyInstance) {
             presences: [...visible].filter(isOnline).map((id) => ({ user_id: id, status: 'online' })),
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))
-              .map((v) => ({ user_id: v.userId, guild_id: v.guildId, channel_id: v.channelId })),
+              .map(voicePayload),
           },
         }),
       );
@@ -96,7 +119,7 @@ export function registerGateway(app: FastifyInstance) {
           if (ch && (await isMember(ch.guild_id, u.id)))
             await sendToGuild(ch.guild_id, 'TYPING_START', { channel_id: ch.id, user_id: u.id });
         }
-        if (msg.op === 'voice_state') await setVoiceState(u, msg.channel_id ?? null);
+        if (msg.op === 'voice_state') await setVoiceState(u, msg.channel_id ?? null, readFlags(msg));
       } catch (e) {
         app.log.error(e);
       }
