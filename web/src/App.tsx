@@ -3,6 +3,7 @@ import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
+  ChevronDown, DoorOpen,
 } from 'lucide-react';
 import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
@@ -11,8 +12,12 @@ import { useUpdateAvailable } from './update';
 import { useVoiceShortcuts } from './shortcuts';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
-import { updateSettings, useSettings } from './settings';
-import { useStore, type Gateway, type State, type VoiceFlags } from './store';
+import { updateSettings, useSettings, getSettings, type Settings } from './settings';
+import { myPresence, useStore, type Gateway, type State, type VoiceFlags } from './store';
+import { Avatar, GuildIcon, initials, ProfileCard, StatusMenu } from './profile';
+import { ServerSettings } from './ServerSettings';
+import { mentionsMe } from './notify';
+import type { Presence } from './api';
 import {
   CALL_EMOJIS, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, useVoice,
   type ShareCodec, type ShareFps, type ShareOptions, type ShareResolution, type Voice, type VoiceUser,
@@ -125,7 +130,17 @@ function Main({ onLogout }: { onLogout: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.voiceAction?.n]);
   const [sounds, setSounds] = useState(soundsEnabled);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState<false | string>(false); // aba aberta
+  const [statusMenu, setStatusMenu] = useState(false);
+  const [profile, setProfile] = useState<ProfileOpen | null>(null);
+  const [serverSettings, setServerSettings] = useState<string | null>(null);
+  const settings = useSettings();
+  const streamer = streamerOn(settings, voice.sharing);
+  useEffect(() => {
+    openProfileFn = setProfile;
+    return () => void (openProfileFn = null);
+  }, []);
+  const presenceOf = (id: string): Presence => (id === state.user?.id ? myPresence(state.status) : state.presence[id] ?? 'offline');
   const toggleSounds = () => {
     setSoundsEnabled(!sounds);
     setSounds(!sounds);
@@ -146,6 +161,11 @@ function Main({ onLogout }: { onLogout: () => void }) {
   }, [state.ready]);
 
   const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
+  // Canal de voz apagado ou saí do servidor: sai da call.
+  useEffect(() => {
+    if (voice.channelId && state.ready && !state.guilds.some((g) => g.channels.some((c) => c.id === voice.channelId))) void voice.leave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.guilds, voice.channelId]);
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
 
   useEffect(() => {
@@ -193,14 +213,18 @@ function Main({ onLogout }: { onLogout: () => void }) {
   };
 
   const voiceChannel = guild?.channels.find((c) => c.id === voice.channelId);
+  const leaveGuild = async (g: Guild) => {
+    if (!confirm(`Sair do servidor ${g.name}? Você só volta com um convite novo.`)) return;
+    await api('DELETE', `/guilds/${g.id}/members/@me`).catch((e) => alert(e.message));
+  };
   const voiceGuild = state.guilds.find((g) => g.channels.some((c) => c.id === voice.channelId));
 
   return (
     <div className="app">
       <nav className="guilds">
         {state.guilds.map((g) => (
-          <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
-            {initials(g.name)}
+          <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''} ${g.icon ? 'has-icon' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
+            <GuildIcon name={g.name} icon={g.icon} />
           </button>
         ))}
         <div className="guild-sep" />
@@ -211,11 +235,15 @@ function Main({ onLogout }: { onLogout: () => void }) {
       <aside className="sidebar">
         {guild ? (
           <ChannelList
+            onLeave={() => leaveGuild(guild)}
             guild={guild}
             state={state}
             me={state.user}
             activeId={view === 'voice' ? voice.channelId : textChannel?.id}
             onOpen={openChannel}
+            streamer={streamer}
+            onServerSettings={() => setServerSettings(guild.id)}
+            presenceOf={presenceOf}
             onMemberMenu={(e, m) => {
               if (m.id === state.user?.id) return;
               e.preventDefault();
@@ -233,11 +261,16 @@ function Main({ onLogout }: { onLogout: () => void }) {
         )}
         {voice.channelId && <VoiceBar voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onOpen={() => setView('voice')} />}
         <div className="userbar">
-          <Avatar user={state.user} online />
-          <div className="userbar-name">
-            <strong>{state.user.display_name}</strong>
-            <small>@{state.user.username}</small>
-          </div>
+          <button className="userbar-me" title="Mudar status" onClick={() => setStatusMenu((v) => !v)}>
+            <Avatar user={state.user} status={myPresence(state.status) === 'offline' ? 'offline' : myPresence(state.status)} />
+            <div className="userbar-name">
+              <strong>{state.user.display_name}</strong>
+              <small>{state.user.custom_status || (streamer && settings.streamerHideNames ? STATUS_TEXT[state.status] : `@${state.user.username}`)}</small>
+            </div>
+          </button>
+          {statusMenu && (
+            <StatusMenu user={state.user} status={state.status} onClose={() => setStatusMenu(false)} onEditProfile={() => setSettingsOpen('profile')} />
+          )}
           <button className={`icon ${voice.muted || voice.serverMuted ? 'danger' : ''}`} title={voice.serverMuted ? 'Silenciado pelo dono do servidor' : voice.muted ? 'Ativar microfone' : 'Silenciar'} onClick={voice.toggleMute}>
             {voice.muted || voice.serverMuted ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
@@ -247,8 +280,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
           <button className={`icon ${sounds ? '' : 'danger'}`} title={sounds ? 'Desligar sons' : 'Ligar sons'} onClick={toggleSounds}>
             {sounds ? <Bell size={18} /> : <BellOff size={18} />}
           </button>
-          <button className="icon" title="Configurações" onClick={() => setSettingsOpen(true)}><SettingsIcon size={18} /></button>
-          <button className="icon" title="Sair da conta" onClick={onLogout}><LogOut size={18} /></button>
+          <button className="icon" title="Configurações" onClick={() => setSettingsOpen('account')}><SettingsIcon size={18} /></button>
         </div>
       </aside>
 
@@ -260,7 +292,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             voiceFlags={state.voiceFlags}
             guild={voiceGuild}
             isOwner={!!voiceGuild && voiceGuild.owner_id === state.user.id}
-            onSettings={() => setSettingsOpen(true)}
+            onSettings={() => setSettingsOpen('voice')}
           />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} state={state} dispatch={dispatch} gateway={gateway} />
@@ -269,7 +301,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
         )}
       </main>
 
-      {guild && view === 'text' && <MemberList guild={guild} state={state} />}
+      {guild && view === 'text' && <MemberList guild={guild} presenceOf={presenceOf} />}
       {sideMenu && guild && (
         <CallMenu
           menu={sideMenu}
@@ -284,7 +316,34 @@ function Main({ onLogout }: { onLogout: () => void }) {
       <Toasts />
       <UpdateWatcher voiceChannelId={voice.channelId} sharing={voice.sharing} />
       <AskHost />
-      {settingsOpen && <SettingsView onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }} />}
+      {settingsOpen && (
+        <SettingsView
+          tab={settingsOpen}
+          user={state.user}
+          status={state.status}
+          onLogout={onLogout}
+          onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }}
+        />
+      )}
+      {profile && (
+        <ProfileCard
+          user={state.guilds.flatMap((g) => g.members).find((m) => m.id === profile.user.id) ?? (profile.user.id === state.user.id ? state.user : profile.user)}
+          status={presenceOf(profile.user.id)}
+          x={profile.x}
+          y={profile.y}
+          isMe={profile.user.id === state.user.id}
+          onEdit={() => (setProfile(null), setSettingsOpen('profile'))}
+          onClose={() => setProfile(null)}
+        />
+      )}
+      {serverSettings && state.guilds.some((g) => g.id === serverSettings) && (
+        <ServerSettings
+          guild={state.guilds.find((g) => g.id === serverSettings)!}
+          me={state.user}
+          presenceOf={presenceOf}
+          onClose={() => setServerSettings(null)}
+        />
+      )}
     </div>
   );
 }
@@ -298,9 +357,35 @@ function ChannelList(props: {
   onOpen: (c: Channel) => void;
   onMemberMenu?: (e: React.MouseEvent, m: User) => void;
   voiceSpeaking?: Set<string>;
+  streamer?: boolean;
+  onServerSettings?: () => void;
+  onLeave?: () => void;
+  presenceOf?: (id: string) => Presence;
 }) {
-  const { guild, state, me, activeId, onOpen, onMemberMenu, voiceSpeaking } = props;
+  const { guild, state, me, activeId, onOpen, onMemberMenu, voiceSpeaking, streamer, onServerSettings, onLeave } = props;
   const isOwner = guild.owner_id === me.id;
+  const [menu, setMenu] = useState(false);
+  const [chMenu, setChMenu] = useState<{ c: Channel; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu && !chMenu) return;
+    const close = () => (setMenu(false), setChMenu(null));
+    const t = setTimeout(() => window.addEventListener('click', close));
+    return () => (clearTimeout(t), window.removeEventListener('click', close));
+  }, [menu, chMenu]);
+  const editChannel = async (c: Channel) => {
+    const name = await ask('Nome do canal', { value: c.name, okText: 'Salvar' });
+    if (!name || name === c.name) return;
+    await api('PATCH', `/channels/${c.id}`, { name }).catch((e) => alert(e.message));
+  };
+  const editTopic = async (c: Channel) => {
+    const topic = await ask('Tópico do canal (aparece no topo do chat)', { value: c.topic ?? '', okText: 'Salvar' });
+    if (topic === null) return;
+    await api('PATCH', `/channels/${c.id}`, { topic: topic.trim() || null }).catch((e) => alert(e.message));
+  };
+  const deleteChannel = async (c: Channel) => {
+    if (!confirm(`Apagar o canal ${c.name}? As mensagens dele somem para sempre.`)) return;
+    await api('DELETE', `/channels/${c.id}`).catch((e) => alert(e.message));
+  };
   const add = async (type: 'text' | 'voice') => {
     const name = await ask(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz', { okText: 'Criar' });
     if (name) await api('POST', `/guilds/${guild.id}/channels`, { name, type }).catch((e) => alert(e.message));
@@ -309,6 +394,8 @@ function ChannelList(props: {
     const { code } = await api<{ code: string }>('POST', `/guilds/${guild.id}/invites`, {});
     const link = `${location.origin}/convite/${code}`;
     await navigator.clipboard?.writeText(link).catch(() => {});
+    // Modo streamer: copia sem mostrar o link na tela (quem assiste não consegue entrar).
+    if (streamer && getSettings().streamerHideInvites) return void toast('Convite copiado. O link fica escondido no modo streamer.');
     await ask('Convite copiado (válido por 7 dias)', { value: link, readOnly: true });
   };
   const section = (type: 'text' | 'voice', title: string) => (
@@ -321,7 +408,15 @@ function ChannelList(props: {
         .filter((c) => c.type === type)
         .map((c) => (
           <div key={c.id}>
-            <button className={`channel ${c.id === activeId ? 'active' : ''}`} onClick={() => onOpen(c)}>
+            <button
+              className={`channel ${c.id === activeId ? 'active' : ''}`}
+              onClick={() => onOpen(c)}
+              onContextMenu={(e) => {
+                if (!isOwner) return;
+                e.preventDefault();
+                setChMenu({ c, x: e.clientX, y: e.clientY });
+              }}
+            >
               <span className="hash">{type === 'text' ? <Hash size={18} /> : <Volume2 size={18} />}</span> <span className="channel-name">{c.name}</span>
             </button>
             {type === 'voice' &&
@@ -336,7 +431,7 @@ function ChannelList(props: {
                     onContextMenu={(e) => onMemberMenu?.(e, m)}
                     title={m.id === me.id ? undefined : 'Botão direito: volume' + (isOwner ? ' e moderação' : '')}
                   >
-                    <Avatar user={m} size={20} /> <span className="voice-member-name">{m.display_name}</span>
+                    <Avatar user={m} size={20} /> <span className="voice-member-name" onClick={(e) => openProfile(m, e)}>{m.display_name}</span>
                     <span className="voice-member-icons">
                       {f.self_stream && <span className="live small">AO VIVO</span>}
                       {f.self_video && <Video size={14} aria-label="Câmera ligada" />}
@@ -352,28 +447,51 @@ function ChannelList(props: {
   return (
     <div className="channels">
       <header className="guild-header">
-        <span>{guild.name}</span>
+        <button className="guild-name" onClick={() => setMenu((v) => !v)}>
+          <span>{guild.name}</span> <ChevronDown size={16} />
+        </button>
         <button className="icon small" title="Convidar pessoas" onClick={invite}><UserPlus size={18} /></button>
       </header>
+      {menu && (
+        <div className="guild-menu" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => (setMenu(false), void invite())}><UserPlus size={16} /> Convidar pessoas</button>
+          {isOwner && <button onClick={() => (setMenu(false), onServerSettings?.())}><SettingsIcon size={16} /> Configurações do servidor</button>}
+          {isOwner && <button onClick={() => (setMenu(false), void add('text'))}><Hash size={16} /> Criar canal de texto</button>}
+          {isOwner && <button onClick={() => (setMenu(false), void add('voice'))}><Volume2 size={16} /> Criar canal de voz</button>}
+          {!isOwner && <button className="danger-text" onClick={() => (setMenu(false), onLeave?.())}><DoorOpen size={16} /> Sair do servidor</button>}
+        </div>
+      )}
+      {chMenu && (
+        <div className="context-menu" style={{ left: chMenu.x, top: chMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => (setChMenu(null), void editChannel(chMenu.c))}><Pencil size={14} /> Renomear canal</button>
+          {chMenu.c.type === 'text' && <button onClick={() => (setChMenu(null), void editTopic(chMenu.c))}><Hash size={14} /> Editar tópico</button>}
+          <button className="danger-text" onClick={() => (setChMenu(null), void deleteChannel(chMenu.c))}><Trash2 size={14} /> Apagar canal</button>
+        </div>
+      )}
       {section('text', 'Canais de texto')}
       {section('voice', 'Canais de voz')}
     </div>
   );
 }
 
-function MemberList({ guild, state }: { guild: Guild; state: State }) {
-  const online = guild.members.filter((m) => state.online[m.id]);
-  const offline = guild.members.filter((m) => !state.online[m.id]);
+function MemberList({ guild, presenceOf }: { guild: Guild; presenceOf: (id: string) => Presence }) {
+  const online = guild.members.filter((m) => presenceOf(m.id) !== 'offline');
+  const offline = guild.members.filter((m) => presenceOf(m.id) === 'offline');
+  const row = (m: User, off?: boolean) => (
+    <div key={m.id} className={`member ${off ? 'offline' : ''}`} onClick={(e) => openProfile(m, e)}>
+      <Avatar user={m} status={presenceOf(m.id)} />
+      <div className="member-name">
+        <span>{m.display_name}{m.id === guild.owner_id && <span className="crown" title="Dono do servidor"> 👑</span>}</span>
+        {m.custom_status && !off && <small>{m.custom_status}</small>}
+      </div>
+    </div>
+  );
   return (
     <aside className="members">
       <div className="section">Online — {online.length}</div>
-      {online.map((m) => (
-        <div key={m.id} className="member"><Avatar user={m} online /> {m.display_name}</div>
-      ))}
+      {online.map((m) => row(m))}
       <div className="section">Offline — {offline.length}</div>
-      {offline.map((m) => (
-        <div key={m.id} className="member offline"><Avatar user={m} /> {m.display_name}</div>
-      ))}
+      {offline.map((m) => row(m, true))}
     </aside>
   );
 }
@@ -419,8 +537,9 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
-    const content = text.trim();
-    if (!content) return;
+    const raw = text.trim();
+    if (!raw) return;
+    const content = getSettings().convertEmoticons ? convertEmoticons(raw) : raw;
     setText('');
     stick.current = true;
     await api('POST', `/channels/${channel.id}/messages`, { content }).catch((err) => alert(err.message));
@@ -440,7 +559,10 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
   return (
     <div className="chat">
-      <header className="topbar"><span className="hash"><Hash size={20} /></span> {channel.name}</header>
+      <header className="topbar">
+        <span className="hash"><Hash size={20} /></span> {channel.name}
+        {channel.topic && <span className="topic" title={channel.topic}>{channel.topic}</span>}
+      </header>
       <div className="messages" ref={listRef} onScroll={onScroll}>
         {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
         {messages?.map((m, i) => {
@@ -459,6 +581,12 @@ function Chat(props: { channel: Channel; state: State; dispatch: (a: any) => voi
 
 function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped: boolean; mine: boolean; me: string; members: User[] }) {
   const time = new Date(msg.created_at);
+  const s = useSettings();
+  const author = members.find((m) => m.id === msg.author.id) ?? msg.author; // perfil atualizado (foto, nome)
+  const meUser = members.find((m) => m.id === me) ?? null;
+  const mention = !mine && mentionsMe(msg.content, meUser);
+  const hhmm = time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: !s.use24h });
+  const compact = s.messageDisplay === 'compact';
   const [picker, setPicker] = useState(false);
   const react = async (emoji: string) => {
     setPicker(false);
@@ -475,20 +603,31 @@ function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped
     if (confirm('Apagar esta mensagem?')) await api('DELETE', `/messages/${msg.id}`).catch((e) => alert(e.message));
   };
   return (
-    <div className={`message ${grouped ? 'grouped' : ''}`}>
-      {grouped ? <span className="gutter-time">{time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span> : <Avatar user={msg.author} size={40} />}
+    <div className={`message ${grouped && !compact ? 'grouped' : ''} ${compact ? 'compact' : ''} ${mention ? 'mention' : ''}`}>
+      {compact ? (
+        <span className="compact-time">{hhmm}</span>
+      ) : grouped ? (
+        <span className="gutter-time">{hhmm}</span>
+      ) : (
+        <span className="msg-avatar" onClick={(e) => openProfile(author, e)}><Avatar user={author} size={40} /></span>
+      )}
       <div className="message-body">
-        {!grouped && (
+        {compact && (
+          <strong className="compact-author" onClick={(e) => openProfile(author, e)}>
+            {s.showAvatars && <Avatar user={author} size={18} />} {author.display_name}
+          </strong>
+        )}
+        {!grouped && !compact && (
           <div className="message-head">
-            <strong>{msg.author.display_name}</strong>
-            <small>{time.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</small>
+            <strong className="author" onClick={(e) => openProfile(author, e)}>{author.display_name}</strong>
+            <small>{time.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', hour12: !s.use24h })}</small>
           </div>
         )}
         <div className="message-content">
           <Markdown text={msg.content} />
           {msg.edited_at && <small className="edited"> (editado)</small>}
         </div>
-        {!!msg.reactions?.length && (
+        {s.showReactions && !!msg.reactions?.length && (
           <div className="reactions">
             {msg.reactions.map((r) => (
               <button
@@ -521,22 +660,24 @@ function MessageRow({ msg, grouped, mine, me, members }: { msg: Message; grouped
 
 /** Markdown mínimo: **negrito**, *itálico*, `código`, ||spoiler|| e links. */
 function Markdown({ text }: { text: string }) {
+  const s = useSettings();
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\|\|[^|]+\|\||https?:\/\/\S+)/g);
   return (
     <>
       {parts.map((p, i) => {
         if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i}>{p.slice(2, -2)}</strong>;
-        if (p.startsWith('||') && p.endsWith('||') && p.length > 4) return <Spoiler key={i} text={p.slice(2, -2)} />;
+        if (p.startsWith('||') && p.endsWith('||') && p.length > 4) return <Spoiler key={i} text={p.slice(2, -2)} always={s.spoilers === 'always'} />;
         if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return <em key={i}>{p.slice(1, -1)}</em>;
         if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return <code key={i}>{p.slice(1, -1)}</code>;
+        if (/^https?:\/\//.test(p) && !s.showLinks) return <span key={i}>{p}</span>;
         if (/^https?:\/\//.test(p)) return <a key={i} href={p} target="_blank" rel="noreferrer noopener">{p}</a>;
         return <span key={i}>{p}</span>;
       })}
     </>
   );
 }
-function Spoiler({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function Spoiler({ text, always }: { text: string; always?: boolean }) {
+  const [open, setOpen] = useState(!!always);
   return <span className={`spoiler ${open ? 'open' : ''}`} onClick={() => setOpen(true)}>{text}</span>;
 }
 
@@ -1256,17 +1397,25 @@ function StreamStats({ track }: { track: Track }) {
   );
 }
 
-// ---------------------------------------------------------------- Utilitários
-function initials(name: string) {
-  return name.split(/\s+/).map((w) => w[0]).join('').slice(0, 3).toUpperCase();
-}
 
-function Avatar({ user, size = 32, online }: { user: User; size?: number; online?: boolean }) {
-  const hue = [...user.id].reduce((h, c) => h + c.charCodeAt(0), 0) % 360;
-  return (
-    <span className="avatar" style={{ width: size, height: size, background: `hsl(${hue} 55% 45%)`, fontSize: size * 0.4 }}>
-      {initials(user.display_name)}
-      {online && <span className="dot" />}
-    </span>
-  );
-}
+// ---------------------------------------------------------------- Utilitários
+const STATUS_TEXT = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' } as const;
+/** Modo streamer ligado agora (sempre, ou sozinho enquanto transmite a tela). */
+export const streamerOn = (s: Settings, sharing: boolean) => s.streamerMode || (s.streamerAuto && sharing);
+
+/** Converte os emoticons mais comuns em emoji ao enviar, como o Discord. */
+const EMOTICONS: [RegExp, string][] = [
+  [/(^|\s):\)(?=\s|$)/g, '$1🙂'], [/(^|\s):D(?=\s|$)/g, '$1😄'], [/(^|\s):\((?=\s|$)/g, '$1🙁'], [/(^|\s);\)(?=\s|$)/g, '$1😉'],
+  [/(^|\s):P(?=\s|$)/gi, '$1😛'], [/(^|\s):O(?=\s|$)/g, '$1😮'], [/(^|\s)<3(?=\s|$)/g, '$1❤️'], [/(^|\s):'\((?=\s|$)/g, '$1😢'],
+  [/(^|\s)xD(?=\s|$)/g, '$1😆'],
+];
+const convertEmoticons = (t: string) => EMOTICONS.reduce((acc, [re, out]) => acc.replace(re, out), t);
+
+/** Abre o cartão de perfil de alguém perto do elemento clicado. */
+type ProfileOpen = { user: User; x: number; y: number };
+let openProfileFn: ((p: ProfileOpen) => void) | null = null;
+const openProfile = (user: User, e: React.MouseEvent) => {
+  e.stopPropagation();
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openProfileFn?.({ user, x: r.right + 8, y: r.top });
+};

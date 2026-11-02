@@ -1,14 +1,17 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { playSound } from './sounds';
 import { checkForUpdate } from './update';
-import { gatewayUrl, getToken, type Channel, type Guild, type Message, type User } from './api';
+import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Presence, type User, type UserStatus } from './api';
+import { startIdleWatch } from './activity';
+import { notifyMessage, setMe } from './notify';
 
 export type State = {
   ready: boolean;
   connection: number; // muda a cada READY (reconexão)
   user: User | null;
+  status: UserStatus; // o que eu escolhi
   guilds: Guild[];
-  online: Record<string, true>;
+  presence: Record<string, Presence>; // só quem não está offline
   voice: Record<string, string>; // userId -> voice channelId
   voiceFlags: Record<string, VoiceFlags>; // userId -> mutado, ensurdecido, transmitindo, câmera
   messages: Record<string, Message[]>; // channelId -> messages
@@ -19,18 +22,30 @@ export type State = {
 export type VoiceServerAction = { n: number; action: 'mute' | 'deafen' | 'disconnect' | 'move'; by: string; channel_id?: string };
 
 type Action =
-  | { t: 'READY'; d: { user: User; guilds: Guild[]; presences: { user_id: string }[]; voice_states: VoiceState[] } }
-  | { t: 'GUILD_CREATE'; d: Guild & { online?: string[] } }
-  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; online?: boolean } }
-  | { t: 'CHANNEL_CREATE'; d: Channel }
+  | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; presences: PresenceItem[]; voice_states: VoiceState[] } }
+  | { t: 'GUILD_CREATE'; d: Guild & { presences?: PresenceItem[] } }
+  | { t: 'GUILD_UPDATE'; d: Omit<Guild, 'channels' | 'members'> }
+  | { t: 'GUILD_DELETE'; d: { id: string } }
+  | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; status?: Presence } }
+  | { t: 'GUILD_MEMBER_REMOVE'; d: { guild_id: string; user_id: string } }
+  | { t: 'USER_UPDATE'; d: User }
+  | { t: 'STATUS_UPDATE'; d: { status: UserStatus } }
+  | { t: 'CHANNEL_CREATE' | 'CHANNEL_UPDATE'; d: Channel }
+  | { t: 'CHANNEL_DELETE'; d: { id: string; guild_id: string } }
   | { t: 'MESSAGE_CREATE' | 'MESSAGE_UPDATE'; d: Message }
   | { t: 'MESSAGE_DELETE'; d: { id: string; channel_id: string } }
   | { t: 'MESSAGES_LOADED'; d: { channel_id: string; messages: Message[]; older: boolean } }
-  | { t: 'PRESENCE_UPDATE'; d: { user_id: string; status: 'online' | 'offline' } }
+  | { t: 'PRESENCE_UPDATE'; d: PresenceItem }
   | { t: 'VOICE_STATE_UPDATE'; d: VoiceState }
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
   | { t: 'TYPING_SWEEP' }
   | { t: 'VOICE_SERVER_ACTION'; d: Omit<VoiceServerAction, 'n'> };
+
+type PresenceItem = { user_id: string; status: Presence };
+const presenceMap = (items: PresenceItem[] = []) =>
+  Object.fromEntries(items.filter((p) => p.status && p.status !== 'offline').map((p) => [p.user_id, p.status])) as Record<string, Presence>;
+/** Meu status como os outros veem (invisível = offline, mas eu me vejo com a bolinha cinza). */
+export const myPresence = (s: UserStatus): Presence => (s === 'invisible' ? 'offline' : s);
 
 export type VoiceFlags = {
   self_mute?: boolean;
@@ -42,7 +57,7 @@ export type VoiceFlags = {
 };
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null } & VoiceFlags;
 
-const initial: State = { ready: false, connection: 0, user: null, guilds: [], online: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null };
+const initial: State = { ready: false, connection: 0, user: null, status: 'online', guilds: [], presence: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -72,28 +87,60 @@ function reducer(s: State, a: Action): State {
         ready: true,
         connection: s.connection + 1,
         user: a.d.user,
+        status: a.d.status ?? 'online',
         guilds: a.d.guilds,
-        online: { ...Object.fromEntries(a.d.presences.map((p) => [p.user_id, true])), [a.d.user.id]: true },
+        presence: presenceMap(a.d.presences),
         voice,
         voiceFlags,
         messages: s.messages,
       };
     }
     case 'GUILD_CREATE': {
-      const { online: ids = [], ...guild } = a.d;
+      const { presences, ...guild } = a.d as Guild & { presences?: PresenceItem[]; online?: unknown };
+      delete (guild as { online?: unknown }).online;
       return {
         ...s,
         guilds: [...s.guilds.filter((g) => g.id !== guild.id), guild],
-        online: { ...s.online, ...Object.fromEntries(ids.map((id) => [id, true as const])) },
+        presence: { ...s.presence, ...presenceMap(presences) },
       };
     }
+    case 'GUILD_UPDATE':
+      return { ...s, guilds: s.guilds.map((g) => (g.id === a.d.id ? { ...g, ...a.d } : g)) };
+    case 'GUILD_DELETE':
+      return { ...s, guilds: s.guilds.filter((g) => g.id !== a.d.id) };
+    case 'GUILD_MEMBER_REMOVE':
+      return { ...s, guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, members: g.members.filter((m) => m.id !== a.d.user_id) } : g)) };
+    case 'USER_UPDATE': {
+      const u = a.d;
+      const fix = (m: User) => (m.id === u.id ? { ...m, ...u } : m);
+      const messages: State['messages'] = {};
+      for (const [ch, list] of Object.entries(s.messages)) messages[ch] = list.some((m) => m.author.id === u.id) ? list.map((m) => (m.author.id === u.id ? { ...m, author: fix(m.author) } : m)) : list;
+      return {
+        ...s,
+        user: s.user?.id === u.id ? { ...s.user, ...u } : s.user,
+        guilds: s.guilds.map((g) => (g.members.some((m) => m.id === u.id) ? { ...g, members: g.members.map(fix) } : g)),
+        messages,
+      };
+    }
+    case 'STATUS_UPDATE':
+      return { ...s, status: a.d.status };
     case 'GUILD_MEMBER_ADD':
       return {
         ...s,
-        online: a.d.online ? { ...s.online, [a.d.user.id]: true } : s.online,
+        presence: a.d.status && a.d.status !== 'offline' ? { ...s.presence, [a.d.user.id]: a.d.status } : s.presence,
         guilds: s.guilds.map((g) =>
           g.id === a.d.guild_id && !g.members.some((m) => m.id === a.d.user.id) ? { ...g, members: [...g.members, a.d.user] } : g,
         ),
+      };
+    case 'CHANNEL_UPDATE':
+      return {
+        ...s,
+        guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, channels: g.channels.map((c) => (c.id === a.d.id ? a.d : c)) } : g)),
+      };
+    case 'CHANNEL_DELETE':
+      return {
+        ...s,
+        guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, channels: g.channels.filter((c) => c.id !== a.d.id) } : g)),
       };
     case 'CHANNEL_CREATE':
       return {
@@ -127,10 +174,10 @@ function reducer(s: State, a: Action): State {
       return { ...s, messages: { ...s.messages, [a.d.channel_id]: cur.filter((m) => m.id !== a.d.id) } };
     }
     case 'PRESENCE_UPDATE': {
-      const online = { ...s.online };
-      if (a.d.status === 'online') online[a.d.user_id] = true;
-      else delete online[a.d.user_id];
-      return { ...s, online };
+      const presence = { ...s.presence };
+      if (a.d.status && a.d.status !== 'offline') presence[a.d.user_id] = a.d.status;
+      else delete presence[a.d.user_id];
+      return { ...s, presence };
     }
     case 'VOICE_STATE_UPDATE': {
       const voice = { ...s.voice };
@@ -178,6 +225,7 @@ export function useStore(onUnauthorized: () => void) {
   const [state, dispatch] = useReducer(reducer, initial);
   const wsRef = useRef<WebSocket | null>(null);
   const meRef = useRef<string | null>(null);
+  const statusRef = useRef<UserStatus>('online');
   const [failures, setFailures] = useState(0); // tentativas seguidas sem conseguir conectar
 
   useEffect(() => {
@@ -195,9 +243,18 @@ export function useStore(onUnauthorized: () => void) {
         try {
           const msg = JSON.parse(e.data);
           if (!msg?.t || msg.t === 'PONG') return;
-          if (msg.t === 'READY') meRef.current = msg.d.user.id;
-          // Mensagem nova de outra pessoa com a aba em segundo plano: toca um aviso curto.
-          if (msg.t === 'MESSAGE_CREATE' && document.hidden && msg.d.author?.id !== meRef.current) playSound('message');
+          if (msg.t === 'READY' || (msg.t === 'USER_UPDATE' && msg.d.id === meRef.current)) setMe(msg.d.user ?? msg.d);
+          if (msg.t === 'READY') {
+            meRef.current = msg.d.user.id;
+            statusRef.current = msg.d.status ?? 'online';
+          }
+          if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
+          // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
+          // "Não perturbe" silencia os dois, como no Discord.
+          if (msg.t === 'MESSAGE_CREATE' && msg.d.author?.id !== meRef.current && statusRef.current !== 'dnd') {
+            if (document.hidden) playSound('message');
+            notifyMessage(msg.d);
+          }
           dispatch(msg);
         } catch {
           /* mensagem inválida: ignora */
@@ -223,8 +280,11 @@ export function useStore(onUnauthorized: () => void) {
     connect();
     const ping = setInterval(() => wsRef.current?.readyState === 1 && wsRef.current.send('{"op":"ping"}'), 20000);
     const sweep = setInterval(() => dispatch({ t: 'TYPING_SWEEP' }), 2000);
+    // Ausente sozinho depois de 10 minutos parado (como no Discord). Volta ao mexer de novo.
+    const stopIdle = startIdleWatch((idle) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify({ op: 'idle', idle })));
     return () => {
       closed = true;
+      stopIdle();
       clearTimeout(timer);
       clearInterval(ping);
       clearInterval(sweep);

@@ -4,15 +4,24 @@ import { z } from 'zod';
 import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import { requireAuth, signSession } from './auth.js';
 import {
-  get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser,
+  get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser, memberIds,
 } from './db.js';
-import { getServerMod, isOnline, sendToGuild, sendToUser, setServerMod, setVoiceState, voiceStateOf } from './gateway.js';
+import {
+  broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
+} from './gateway.js';
 
 /** Emojis aceitos nas reações (o mesmo conjunto aparece no site). */
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀'];
 
 /** Payload do servidor + quem está online agora (para a lista de membros já abrir certa). */
-const withPresence = <T extends { members: { id: string }[] }>(g: T) => ({ ...g, online: g.members.filter((m) => isOnline(m.id)).map((m) => m.id) });
+const withPresence = <T extends { members: { id: string }[] }>(g: T) => ({ ...g, presences: presencesOf(g.members.map((m) => m.id)) });
+
+/** Imagem pequena (foto de perfil ou ícone do servidor) em data URL. O site já reduz para 128 px. */
+const imageUrl = z
+  .string()
+  .max(400_000, 'Imagem grande demais')
+  .regex(/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/, 'Imagem inválida');
+const optText = (max: number) => z.string().trim().max(max).nullable().optional().transform((v) => (v ? v : v === undefined ? undefined : null));
 
 // Valores colados em painéis de deploy costumam vir com espaço ou quebra de linha: limpamos tudo.
 const env = (k: string) => process.env[k]?.trim().replace(/^["']|["']$/g, '').trim() || undefined;
@@ -148,7 +157,7 @@ export function registerRoutes(app: FastifyInstance) {
       if (!(await isMember(inv.guild_id, req.user.id))) {
         await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', inv.guild_id, req.user.id, Date.now());
         await run('UPDATE invites SET uses = uses + 1 WHERE code = ?', code);
-        await sendToGuild(inv.guild_id, 'GUILD_MEMBER_ADD', { guild_id: inv.guild_id, user: req.user, online: isOnline(req.user.id) });
+        await sendToGuild(inv.guild_id, 'GUILD_MEMBER_ADD', { guild_id: inv.guild_id, user: req.user, status: presenceOf(req.user.id) });
       }
       const payload = await guildPayload((await getGuild(inv.guild_id))!);
       sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
@@ -267,6 +276,130 @@ export function registerRoutes(app: FastifyInstance) {
         canPublishSources: voiceSources(mod),
       });
       return { url: LIVEKIT_URL, token: await at.toJwt(), server_mute: mod.mute, server_deaf: mod.deaf };
+    });
+
+    // ---------- Minha conta e perfil ----------
+    api.patch('/api/users/@me', async (req, reply) => {
+      const body = z
+        .object({
+          display_name: z.string().trim().min(1).max(32).optional(),
+          username: credentials.shape.username.optional(),
+          avatar: imageUrl.nullable().optional(),
+          bio: optText(190),
+          pronouns: optText(40),
+          banner_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+          custom_status: optText(128),
+        })
+        .parse(req.body);
+      if (body.username && (await get('SELECT 1 AS ok FROM users WHERE lower(username) = lower(?) AND id <> ?', body.username, req.user.id)))
+        return reply.code(400).send({ error: 'Esse usuário já existe' });
+      const cols = (['display_name', 'username', 'avatar', 'bio', 'pronouns', 'banner_color', 'custom_status'] as const).filter((k) => body[k] !== undefined);
+      if (cols.length)
+        await run(`UPDATE users SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`, ...cols.map((c) => body[c]), req.user.id);
+      const user = (await getUser(req.user.id))!;
+      await broadcastUserUpdate(user);
+      return user;
+    });
+
+    api.post('/api/users/@me/password', authLimit, async (req, reply) => {
+      const body = z.object({ current: z.string().min(1).max(128), password: credentials.shape.password }).parse(req.body);
+      const row = (await get('SELECT password_hash FROM users WHERE id = ?', req.user.id)) as { password_hash: string };
+      if (!(await bcrypt.compare(body.current, row.password_hash))) return reply.code(400).send({ error: 'Senha atual incorreta' });
+      await run('UPDATE users SET password_hash = ? WHERE id = ?', await bcrypt.hash(body.password, 10), req.user.id);
+      return { ok: true };
+    });
+
+    api.put('/api/users/@me/status', async (req) => {
+      const { status } = z.object({ status: z.enum(['online', 'idle', 'dnd', 'invisible']) }).parse(req.body);
+      await run('UPDATE users SET status = ? WHERE id = ?', status, req.user.id);
+      await setUserStatus(req.user.id, status);
+      return { status };
+    });
+
+    // ---------- Configurações do servidor (só o dono) ----------
+    const ownedGuild = async (guildId: string, userId: string) => {
+      const g = await getGuild(guildId);
+      return g && g.owner_id === userId ? g : undefined;
+    };
+
+    api.patch('/api/guilds/:guildId', async (req, reply) => {
+      const { guildId } = req.params as { guildId: string };
+      if (!(await ownedGuild(guildId, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      const body = z.object({ name: z.string().trim().min(1).max(64).optional(), icon: imageUrl.nullable().optional() }).parse(req.body);
+      if (body.name !== undefined) await run('UPDATE guilds SET name = ? WHERE id = ?', body.name, guildId);
+      if (body.icon !== undefined) await run('UPDATE guilds SET icon = ? WHERE id = ?', body.icon, guildId);
+      const g = (await getGuild(guildId))!;
+      await sendToGuild(guildId, 'GUILD_UPDATE', g);
+      return g;
+    });
+
+    /** Tira a pessoa do servidor (saiu, foi expulsa ou o servidor foi apagado): sai da voz e some a lista. */
+    const removeMember = async (guildId: string, userId: string) => {
+      const v = voiceStateOf(userId);
+      if (v && v.guildId === guildId) {
+        await setVoiceState({ id: userId }, null);
+        await roomService().removeParticipant(voiceRoom(v.channelId), userId).catch(() => {});
+      }
+      await run('DELETE FROM members WHERE guild_id = ? AND user_id = ?', guildId, userId);
+      sendToUser(userId, 'GUILD_DELETE', { id: guildId });
+      await sendToGuild(guildId, 'GUILD_MEMBER_REMOVE', { guild_id: guildId, user_id: userId });
+    };
+
+    api.delete('/api/guilds/:guildId', async (req, reply) => {
+      const { guildId } = req.params as { guildId: string };
+      if (!(await ownedGuild(guildId, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode apagar' });
+      const ids = await memberIds(guildId);
+      for (const id of ids) {
+        const v = voiceStateOf(id);
+        if (v && v.guildId === guildId) {
+          await setVoiceState({ id }, null);
+          await roomService().removeParticipant(voiceRoom(v.channelId), id).catch(() => {});
+        }
+      }
+      await run('DELETE FROM guilds WHERE id = ?', guildId);
+      for (const id of ids) sendToUser(id, 'GUILD_DELETE', { id: guildId });
+      return { ok: true };
+    });
+
+    api.delete('/api/guilds/:guildId/members/:userId', async (req, reply) => {
+      const { guildId, userId: rawId } = req.params as { guildId: string; userId: string };
+      const userId = rawId === '@me' ? req.user.id : rawId;
+      const guild = await getGuild(guildId);
+      if (!guild || !(await isMember(guildId, userId))) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
+      if (userId === req.user.id) {
+        if (guild.owner_id === userId) return reply.code(400).send({ error: 'O dono não pode sair. Apague o servidor nas configurações dele.' });
+      } else if (guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode expulsar' });
+      await removeMember(guildId, userId);
+      return { ok: true };
+    });
+
+    api.patch('/api/channels/:channelId', async (req, reply) => {
+      const { channelId } = req.params as { channelId: string };
+      const ch = await getChannel(channelId);
+      if (!ch || !(await ownedGuild(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      const body = z.object({ name: z.string().trim().min(1).max(64).optional(), topic: optText(1024) }).parse(req.body);
+      if (body.name !== undefined)
+        await run('UPDATE channels SET name = ? WHERE id = ?', ch.type === 'text' ? body.name.toLowerCase().replace(/\s+/g, '-') : body.name, ch.id);
+      if (body.topic !== undefined) await run('UPDATE channels SET topic = ? WHERE id = ?', body.topic, ch.id);
+      const updated = (await getChannel(ch.id))!;
+      await sendToGuild(ch.guild_id, 'CHANNEL_UPDATE', updated);
+      return updated;
+    });
+
+    api.delete('/api/channels/:channelId', async (req, reply) => {
+      const { channelId } = req.params as { channelId: string };
+      const ch = await getChannel(channelId);
+      if (!ch || !(await ownedGuild(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      if (ch.type === 'text' && ((await get("SELECT COUNT(*) AS n FROM channels WHERE guild_id = ? AND type = 'text'", ch.guild_id)) as { n: number }).n <= 1)
+        return reply.code(400).send({ error: 'O servidor precisa de pelo menos um canal de texto' });
+      if (ch.type === 'voice') {
+        for (const id of await memberIds(ch.guild_id))
+          if (voiceStateOf(id)?.channelId === ch.id) await setVoiceState({ id }, null);
+        await roomService().deleteRoom(voiceRoom(ch.id)).catch(() => {});
+      }
+      await run('DELETE FROM channels WHERE id = ?', ch.id);
+      await sendToGuild(ch.guild_id, 'CHANNEL_DELETE', { id: ch.id, guild_id: ch.guild_id });
+      return { ok: true };
     });
 
     // ---------- Moderação de voz (só o dono do servidor) ----------

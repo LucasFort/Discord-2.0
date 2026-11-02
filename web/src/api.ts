@@ -1,6 +1,21 @@
-export type User = { id: string; username: string; display_name: string };
-export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number };
-export type Guild = { id: string; name: string; owner_id: string; channels: Channel[]; members: User[] };
+/** Perfil público. A foto é uma imagem pequena em data URL. */
+export type User = {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar?: string | null;
+  bio?: string | null;
+  pronouns?: string | null;
+  banner_color?: string | null;
+  custom_status?: string | null;
+};
+/** Status escolhido: "invisible" aparece como offline para os outros. */
+export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
+/** O que aparece para os outros (bolinha ao lado da foto). */
+export type Presence = 'online' | 'idle' | 'dnd' | 'offline';
+export const STATUS_LABELS: Record<UserStatus, string> = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' };
+export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null };
+export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; channels: Channel[]; members: User[] };
 export type Message = {
   id: string;
   channel_id: string;

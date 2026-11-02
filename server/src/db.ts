@@ -126,6 +126,24 @@ export const driver: Driver = databaseUrl
   ? await postgresDriver(databaseUrl)
   : await sqliteDriver(process.env.DB_PATH ?? 'discord2.db');
 await driver.exec(SCHEMA);
+
+// Colunas novas em bancos que já existiam (perfil e status, no estilo do Discord).
+// SQLite não tem "ADD COLUMN IF NOT EXISTS": tenta e ignora o erro de coluna repetida.
+const PROFILE_COLUMNS = ['avatar', 'bio', 'pronouns', 'banner_color', 'custom_status', 'status'];
+for (const col of PROFILE_COLUMNS) {
+  try {
+    await driver.exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
+  } catch {
+    /* já existe */
+  }
+}
+for (const [table, col, type] of [['guilds', 'icon', 'TEXT'], ['channels', 'topic', 'TEXT']] as const) {
+  try {
+    await driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+  } catch {
+    /* já existe */
+  }
+}
 if (process.env.NODE_ENV === 'production' && driver.kind === 'sqlite')
   console.warn('[banco] Sem DATABASE_URL: usando SQLite em arquivo. No Render grátis os dados somem a cada reinício.');
 
@@ -145,9 +163,22 @@ export function inviteCode(): string {
   return [...randomBytes(8)].map((b) => alphabet[b % alphabet.length]).join('');
 }
 
-export type User = { id: string; username: string; display_name: string };
-export type Guild = { id: string; name: string; owner_id: string };
-export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number };
+/** Perfil público (o que os outros veem). A foto é uma imagem pequena em data URL. */
+export type User = {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar?: string | null;
+  bio?: string | null;
+  pronouns?: string | null;
+  banner_color?: string | null;
+  custom_status?: string | null;
+};
+/** Status escolhido pela pessoa. "invisible" aparece como offline para os outros. */
+export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
+export type Guild = { id: string; name: string; owner_id: string; icon?: string | null };
+export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null };
+const USER_COLS = 'u.id, u.username, u.display_name, u.avatar, u.bio, u.pronouns, u.banner_color, u.custom_status';
 export type Message = {
   id: string;
   channel_id: string;
@@ -160,23 +191,24 @@ export type Message = {
 /** Uma reação agrupada: o emoji e quem reagiu com ele. */
 export type Reaction = { emoji: string; user_ids: string[] };
 
-export const getUser = async (id: string) =>
-  (await get('SELECT id, username, display_name FROM users WHERE id = ?', id)) as User | undefined;
+export const getUser = async (id: string) => (await get(`SELECT ${USER_COLS} FROM users u WHERE u.id = ?`, id)) as User | undefined;
+export const getStatus = async (id: string) =>
+  (((await get('SELECT status FROM users WHERE id = ?', id)) as { status: string | null } | undefined)?.status ?? 'online') as UserStatus;
 export const isMember = async (guildId: string, userId: string) =>
   !!(await get('SELECT 1 AS ok FROM members WHERE guild_id = ? AND user_id = ?', guildId, userId));
 export const getChannel = async (id: string) => (await get('SELECT * FROM channels WHERE id = ?', id)) as Channel | undefined;
 export const getGuild = async (id: string) =>
-  (await get('SELECT id, name, owner_id, created_at FROM guilds WHERE id = ?', id)) as Guild | undefined;
+  (await get('SELECT id, name, owner_id, icon, created_at FROM guilds WHERE id = ?', id)) as Guild | undefined;
 export const guildsOf = async (userId: string) =>
   (await all(
-    'SELECT g.id, g.name, g.owner_id, g.created_at FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
+    'SELECT g.id, g.name, g.owner_id, g.icon, g.created_at FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
     userId,
   )) as Guild[];
 export const channelsOf = async (guildId: string) =>
   (await all("SELECT * FROM channels WHERE guild_id = ? ORDER BY type = 'voice', position, name", guildId)) as Channel[];
 export const membersOf = async (guildId: string) =>
   (await all(
-    'SELECT u.id, u.username, u.display_name FROM users u JOIN members m ON m.user_id = u.id WHERE m.guild_id = ? ORDER BY u.display_name',
+    `SELECT ${USER_COLS} FROM users u JOIN members m ON m.user_id = u.id WHERE m.guild_id = ? ORDER BY u.display_name`,
     guildId,
   )) as User[];
 export const memberIds = async (guildId: string) =>

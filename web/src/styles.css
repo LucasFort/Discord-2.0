@@ -353,3 +353,152 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
   .voice-view.with-people .grid, .voice-view.with-people .focus-layout { margin-right: 332px; }
 }
 .ok-text { color: var(--ok); font-size: 12px; }
+
+/* ---------- Status, perfil e configurações no estilo do Discord ---------- */
+:root { --msg-font: 15px; --msg-gap: 16px; --saturation: 1; --idle: #f5b84b; --dnd: #f04d5e; --offline: #747f8d; }
+:root.desaturate #root { filter: saturate(var(--saturation)); }
+:root[data-theme='midnight'] {
+  --bg-0: #000; --bg-1: #08090c; --bg-2: #0c0d11; --bg-3: #16181f; --bg-hover: #1d2029; --line: #1b1e26;
+}
+:root[data-theme='light'] {
+  --bg-0: #e3e5e8; --bg-1: #f2f3f5; --bg-2: #ffffff; --bg-3: #e6e8ec; --bg-hover: #dcdfe4; --line: #d4d7dc;
+  --text: #2e3338; --text-muted: #5c6370; --text-strong: #060607; --accent-soft: rgba(124, 92, 255, .14);
+  color-scheme: light;
+}
+:root[data-theme='light'] .message:hover { background: rgba(0, 0, 0, .03); }
+:root[data-theme='light'] .message-content a { color: #0068e0; }
+:root[data-theme='light'] .voice-view .topbar { background: #1c1f26; color: #f4f6fb; }
+:root[data-theme='light'] ::-webkit-scrollbar-thumb { background: #c4c9d0; background-clip: content-box; }
+:root.reduce-motion *, :root.reduce-motion *::before, :root.reduce-motion *::after { animation: none !important; transition: none !important; }
+
+.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.avatar .dot.online { background: var(--ok); }
+.avatar .dot.idle { background: var(--idle); }
+.avatar .dot.dnd { background: var(--dnd); }
+.avatar .dot.offline { background: var(--offline); }
+.avatar .dot.dnd::after { content: ''; position: absolute; left: 1px; right: 1px; top: 50%; height: 2px; margin-top: -1px; background: var(--bg-0); border-radius: 2px; }
+.st-online { color: var(--ok); } .st-idle { color: var(--idle); } .st-dnd { color: var(--dnd); } .st-invisible { color: var(--offline); }
+.guild.has-icon { overflow: hidden; }
+.guild-img { width: 100%; height: 100%; object-fit: cover; }
+.guild.big { width: 96px; height: 96px; display: grid; place-items: center; font-size: 26px; border-radius: 50%; overflow: hidden; background: var(--bg-3); font-weight: 700; }
+
+/* Barra do usuário: clicar na foto abre o status */
+.userbar { position: relative; }
+.userbar-me { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 0; background: none; padding: 2px 4px; border-radius: 8px; text-align: left; }
+.userbar-me:hover { background: var(--bg-hover); }
+.status-menu { position: absolute; left: 8px; bottom: calc(100% + 6px); z-index: 25; width: 280px; display: flex; flex-direction: column; gap: 2px; padding: 8px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, .45); animation: msg-in .12s ease-out; }
+.status-menu-head { display: flex; align-items: center; gap: 10px; padding: 6px 6px 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.status-menu-head > div { display: flex; flex-direction: column; min-width: 0; }
+.status-menu-head strong { color: var(--text-strong); }
+.status-option { justify-content: flex-start; align-items: flex-start; gap: 10px; background: none; padding: 8px; text-align: left; font-size: 14px; }
+.status-option svg { margin-top: 3px; flex: none; }
+.status-option span { display: flex; flex-direction: column; gap: 2px; }
+.status-option small { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.status-option:hover { background: var(--accent); color: white; }
+.status-option:hover small, .status-option:hover svg { color: white; }
+.status-option.active { background: var(--accent-soft); }
+.menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+/* Cartão de perfil */
+.profile-card { position: fixed; z-index: 40; width: 300px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, .5); animation: msg-in .12s ease-out; }
+.profile-card.static { position: static; animation: none; box-shadow: none; }
+.profile-banner { height: 72px; }
+.profile-avatar { margin: -44px 0 0 16px; }
+.profile-avatar .avatar { border: 6px solid var(--bg-1); box-sizing: content-box; }
+.profile-avatar .avatar .dot { width: 18px; height: 18px; border-width: 4px; border-color: var(--bg-1); right: 2px; bottom: 2px; }
+.profile-info { padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 4px; }
+.profile-info h3 { margin: 0; color: var(--text-strong); font-size: 20px; }
+.profile-info h4 { margin: 10px 0 0; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.profile-status { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--bg-2); font-size: 14px; }
+.profile-bio { margin: 0; white-space: pre-wrap; font-size: 14px; }
+.profile-edit { margin: 0 16px 16px; width: calc(100% - 32px); }
+.member { cursor: pointer; }
+.member-name { display: flex; flex-direction: column; min-width: 0; }
+.member-name span, .member-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-name small { font-size: 12px; color: var(--text-muted); }
+.crown { font-size: 12px; }
+.msg-avatar, .author, .compact-author, .voice-member-name { cursor: pointer; }
+.author:hover, .compact-author:hover { text-decoration: underline; }
+
+/* Menu do servidor e dos canais */
+.guild-header { position: relative; padding-left: 8px; }
+.guild-name { flex: 1; min-width: 0; justify-content: space-between; background: none; color: var(--text-strong); font-weight: 700; padding: 8px 10px; }
+.guild-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guild-menu, .context-menu { position: absolute; z-index: 25; display: flex; flex-direction: column; gap: 2px; padding: 6px; min-width: 220px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); animation: msg-in .1s ease-out; }
+.guild-menu { left: 8px; right: 8px; top: 58px; }
+.context-menu { position: fixed; }
+.guild-menu button, .context-menu button { justify-content: flex-start; background: none; padding: 8px 10px; font-size: 14px; border-radius: 6px; }
+.guild-menu button:hover, .context-menu button:hover { background: var(--accent); color: white; }
+.danger-text { color: var(--danger) !important; }
+.guild-menu button.danger-text:hover, .context-menu button.danger-text:hover { background: var(--danger); color: white !important; }
+.channels { position: relative; }
+.topbar .topic { font-weight: 400; color: var(--text-muted); font-size: 14px; padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* Mensagens: tamanho, espaço, compacto e menção */
+.message-content { font-size: var(--msg-font); }
+.message { margin-top: var(--msg-gap); }
+.message.grouped { margin-top: 0; }
+.message.compact { margin-top: 0; padding-top: 2px; padding-bottom: 2px; gap: 8px; align-items: baseline; }
+.message.compact .message-body { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; }
+.compact-time { flex: none; width: 52px; text-align: right; font-size: 11px; color: var(--text-muted); }
+.compact-author { display: inline-flex; align-items: center; gap: 6px; color: var(--text-strong); font-weight: 600; }
+.hide-chat-avatars .compact-author .avatar { display: none; }
+.message.mention { background: rgba(245, 184, 75, .08); box-shadow: inset 3px 0 0 var(--warn); }
+.message.mention:hover { background: rgba(245, 184, 75, .12); }
+
+/* Configurações: grupos, conta e perfil */
+.settings-nav { overflow-y: auto; }
+.settings-group { display: flex; flex-direction: column; gap: 2px; padding-bottom: 12px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.settings-group:last-child { border-bottom: 0; }
+.account-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.account-head { display: flex; align-items: flex-end; gap: 14px; padding: 0 16px; margin-top: -28px; }
+.account-head .avatar { border: 6px solid var(--bg-1); box-sizing: content-box; }
+.account-head > div { flex: 1; padding-bottom: 8px; }
+.account-head h3 { margin: 0; font-size: 18px; color: var(--text-strong); text-transform: none; letter-spacing: 0; }
+.account-head button { margin-bottom: 10px; }
+.account-rows { margin: 12px 16px 16px; background: var(--bg-2); border-radius: 10px; padding: 4px 14px; }
+.account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.account-row:last-child { border-bottom: 0; }
+.account-row small { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+.edit-box { display: flex; flex-direction: column; gap: 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.row-buttons { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+.row-buttons.left { justify-content: flex-start; }
+.ok-text { color: var(--ok); font-size: 13px; }
+textarea { font: inherit; color: var(--text-strong); background: var(--bg-0); border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; width: 100%; outline: none; resize: vertical; }
+textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.profile-editor { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.profile-fields { display: flex; flex-direction: column; gap: 14px; }
+.profile-preview { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; }
+.profile-preview .profile-card { border-radius: 14px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.swatch { width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 2px solid transparent; }
+.swatch.selected { border-color: var(--text-strong); }
+.swatches input[type='color'] { width: 40px; height: 32px; padding: 0 2px; border-radius: 8px; cursor: pointer; }
+.save-bar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-top: 8px; background: var(--bg-0); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.save-bar span { flex: 1; }
+.theme-picker { display: flex; flex-wrap: wrap; gap: 12px; }
+.theme-swatch { flex-direction: column; gap: 8px; background: none; padding: 6px; font-size: 13px; color: var(--text-muted); border: 2px solid transparent; border-radius: 12px; }
+.theme-swatch.selected { border-color: var(--accent); color: var(--text-strong); }
+.theme-sample { width: 76px; height: 52px; border-radius: 10px; border: 1px solid var(--line); }
+.t-dark .theme-sample { background: linear-gradient(90deg, #0b0d12 30%, #171b24 30%); }
+.t-midnight .theme-sample { background: linear-gradient(90deg, #000 30%, #0c0d11 30%); }
+.t-light .theme-sample { background: linear-gradient(90deg, #e3e5e8 30%, #fff 30%); }
+.t-system .theme-sample { background: linear-gradient(135deg, #171b24 50%, #fff 50%); }
+.keybind-table { display: flex; flex-direction: column; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; }
+.keybind-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.keybind-row:last-child { border-bottom: 0; }
+kbd { font: inherit; font-size: 13px; background: var(--bg-3); border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 3px 8px; color: var(--text-strong); }
+
+/* Configurações do servidor */
+.server-overview { display: grid; grid-template-columns: 140px 1fr; gap: 24px; align-items: start; }
+.server-icon-edit { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.admin-list { display: flex; flex-direction: column; }
+.admin-row { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.admin-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.admin-row button { padding: 6px 12px; }
+.invite-link { display: inline-block; margin-top: 4px; user-select: all; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 900px) { .profile-editor, .server-overview { grid-template-columns: 1fr; } }
+.settings-body .profile-info h3 { font-size: 20px; letter-spacing: 0; text-transform: none; color: var(--text-strong); margin: 0; }
+.settings-body .profile-info h4 { margin-top: 10px; }
+.settings-nav button { text-align: left; }

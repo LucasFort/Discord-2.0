@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('nexoDesktop', {
     ipcRenderer.on('shortcut', fn);
     return () => ipcRenderer.removeListener('shortcut', fn);
   },
+  /** Opções do Windows: abrir com o computador, fechar para a bandeja, começar minimizado. */
+  setAppSettings: (s) => ipcRenderer.send('app:settings', { openAtLogin: !!s?.openAtLogin, minimizeToTray: !!s?.minimizeToTray, startMinimized: !!s?.startMinimized }),
+  /** Segundos sem mexer no teclado e mouse (no computador inteiro). */
+  idleSeconds: () => ipcRenderer.invoke('app:idle-seconds'),
   /** Som do computador sem o som do próprio Nexo (Windows 11). PCM 16 bits, estéreo, 48 kHz. */
   systemAudio: {
     available: () => ipcRenderer.invoke('sysaudio:available'),

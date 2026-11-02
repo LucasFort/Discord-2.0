@@ -2,6 +2,9 @@ import { Component, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import './styles.css';
+import { startAppearance } from './appearance';
+
+startAppearance();
 
 /** Se alguma parte da tela quebrar, mostra o erro e um botão de recarregar em vez de uma página cinza vazia. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
