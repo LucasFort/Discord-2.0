@@ -31,6 +31,33 @@ async function createRnnoise(ctx: AudioContext): Promise<AudioNode | null> {
   }
 }
 
+/** Janela (ticks de 20 ms) e atraso máximo do eco para o detector de eco. */
+const ECHO_WIN = 30;
+const ECHO_LAG = 20;
+/** Maior correlação entre o volume do microfone e o do som da call, testando atrasos de 0 a ECHO_LAG ticks. */
+function echoCorrelation(mic: number[], remote: number[]) {
+  const n = ECHO_WIN;
+  const m = mic.slice(-n);
+  const mMean = m.reduce((a, b) => a + b, 0) / n;
+  let mVar = 0;
+  for (const v of m) mVar += (v - mMean) ** 2;
+  if (mVar < n * 4) return 0; // volume quase parado: não dá para comparar
+  let best = 0;
+  for (let lag = 0; lag <= ECHO_LAG; lag++) {
+    const end = remote.length - lag;
+    const r = remote.slice(end - n, end);
+    const rMean = r.reduce((a, b) => a + b, 0) / n;
+    let cov = 0;
+    let rVar = 0;
+    for (let i = 0; i < n; i++) {
+      cov += (m[i] - mMean) * (r[i] - rMean);
+      rVar += (r[i] - rMean) ** 2;
+    }
+    if (rVar > n * 4) best = Math.max(best, cov / Math.sqrt(mVar * rVar));
+  }
+  return best;
+}
+
 const dB = (rms: number) => Math.max(-100, Math.min(0, 20 * Math.log10(rms || 1e-10)));
 
 /**
@@ -214,6 +241,10 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
   private remote = new Map<MediaStreamTrack, { src: MediaStreamAudioSourceNode; an: AnalyserNode }>();
   private remoteUntil = 0;
   private remoteBuf = new Float32Array(512);
+  private remoteHist: number[] = [];
+  private micHist: number[] = [];
+  /** Quanto o microfone agora parece eco do som da call (0 a 1). */
+  echoCorr = 0;
 
   /** Áudios que estão tocando na call. O eco do microfone só pode vir deles. */
   setRemoteTracks(tracks: MediaStreamTrack[]) {
@@ -264,30 +295,41 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.rawLevel = raw;
 
     // Alguém falando (ou transmissão tocando) nas caixas: o que entra no microfone pode ser eco.
-    // Segura 350 ms depois que para, que é o tempo do eco do ambiente sumir.
+    // Segura 600 ms depois que para: o eco do ambiente e o atraso de caixa/fone Bluetooth.
     this.remoteLevel = this.measureRemote();
-    if (this.remoteLevel > -55) this.remoteUntil = now + 350;
+    if (this.remoteLevel > -55) this.remoteUntil = now + 600;
     const echoRisk = s.echoGate && now < this.remoteUntil;
 
     // Ruído de fundo: desce rápido até o mínimo e sobe devagar (não sobe com eco, senão aprende o eco).
     this.noiseFloor = raw < this.noiseFloor ? raw : echoRisk ? this.noiseFloor : Math.min(this.noiseFloor + 0.02, -20);
-    // Com risco de eco a voz precisa chegar perto do volume normal da sua fala; o eco que sobra
-    // depois do cancelamento é bem mais baixo e fica de fora. Falar por cima dos outros continua passando.
-    // Quanto mais forte a proteção, mais perto do volume normal da sua fala o som precisa chegar
-    // enquanto toca som da call (voz dos outros, vídeo, transmissão). O retorno pelo microfone fica de fora.
-    const margin = s.echoStrength === 'max' ? 2 : s.echoStrength === 'normal' ? 9 : 5;
-    const speaking = raw > this.noiseFloor + 10 && raw > -95 && (!echoRisk || raw > this.speechLevel - margin);
+    // Detector de eco: o eco é o som das caixas repetido com atraso, então o "desenho" do volume do
+    // microfone acompanha o do som da call. A sua voz não acompanha (é outra fala), mesmo falando
+    // por cima dos outros. Compara os dois nos últimos 600 ms, com atraso de 0 a 400 ms.
+    const clampDb = (v: number) => Math.max(-70, v);
+    this.micHist.push(clampDb(raw));
+    this.remoteHist.push(clampDb(this.remoteLevel));
+    if (this.micHist.length > ECHO_WIN + ECHO_LAG) this.micHist.shift();
+    if (this.remoteHist.length > ECHO_WIN + ECHO_LAG) this.remoteHist.shift();
+    let speaking = raw > this.noiseFloor + 10 && raw > -95;
+    this.echoCorr = 0;
+    if (echoRisk && speaking && this.micHist.length === ECHO_WIN + ECHO_LAG) {
+      this.echoCorr = echoCorrelation(this.micHist, this.remoteHist);
+      const limit = s.echoStrength === 'max' ? 0.5 : s.echoStrength === 'normal' ? 0.75 : 0.62;
+      if (this.echoCorr > limit) speaking = false;
+    }
     if (speaking) {
       this.lastSpeech = now;
-      this.speechLevel += (raw - this.speechLevel) * 0.03;
+      // Com som da call tocando não aprende o volume da sua voz (senão aprende o eco).
+      if (!echoRisk) this.speechLevel += (raw - this.speechLevel) * 0.03;
       this.speechPeak = Math.max(this.speechPeak, raw);
     } else if (now - this.lastSpeech > 4000) {
       this.speechPeak = Math.max(-100, this.speechPeak - 0.2);
     }
 
-    // Amplificação automática: leva a fala para perto de -24 dB, no máximo +30 dB.
+    // Amplificação automática: leva a fala para perto de -24 dB, no máximo +15 dB.
+    // Mais que isso aumenta junto o eco que sobra e o barulho de fundo (era +30 dB).
     // Não mexe enquanto os outros falam, para não aumentar o eco junto.
-    const wantBoost = s.autoBoost ? Math.max(0, Math.min(30, -24 - this.speechLevel)) : 0;
+    const wantBoost = s.autoBoost ? Math.max(0, Math.min(15, -24 - this.speechLevel)) : 0;
     // Muda devagar (até 5 dB por segundo): mudar rápido no meio da frase soa como volume "respirando".
     if (!echoRisk) this.boostDb += Math.max(-0.1, Math.min(0.1, wantBoost - this.boostDb));
     this.boost!.gain.setTargetAtTime(10 ** (this.boostDb / 20), ctx.currentTime, 0.05);

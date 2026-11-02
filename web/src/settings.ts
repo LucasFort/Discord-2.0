@@ -139,12 +139,14 @@ const KEY = 'nexo.settings';
  * trocado para quem já tinha o Nexo (a pessoa ainda pode escolher de novo depois).
  * 2: supressão "Máxima" (IA duas vezes) deixava um barulho estranho/robótico na voz -> volta para "Forte".
  */
-const VERSION = 2;
+const VERSION = 3;
 
 function load(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings> & { _v?: number };
     if ((saved._v ?? 1) < 2) saved.maxNoiseSuppression = false;
+    // v3: volta a proteção contra eco para todo mundo (retorno na call vem de quem está sem ela).
+    if ((saved._v ?? 1) < 3) Object.assign(saved, { echoCancellation: true, echoGate: true });
     saved._v = VERSION;
     return { ...DEFAULTS, ...saved };
   } catch {
@@ -196,8 +198,8 @@ export function micConstraints(s: Settings = current): AudioCaptureOptions {
     echoCancellation: s.echoCancellation,
     // A amplificação automática do Nexo já cuida do volume; com as duas juntas o volume "bombeia".
     autoGainControl: s.autoGainControl && !s.autoBoost,
-    // Pede o cancelamento de eco do sistema (melhor que o do navegador quando existe) e mono.
-    ...(s.echoCancellation ? ({ echoCancellationType: 'system' } as object) : {}),
+    // Cancelamento de eco do próprio Chromium (o mesmo motor do WebRTC que o Discord usa).
+    // O "do sistema" do Windows é bem pior e, quando o navegador escolhe ele, desliga o dele.
     channelCount: 1,
   };
 }
