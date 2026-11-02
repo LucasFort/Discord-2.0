@@ -59,6 +59,19 @@ function volumeFor(identity: string, source: Track.Source, deaf: boolean, room?:
 }
 import type { Gateway } from './store';
 
+const isDesktopApp = () => /Electron\//.test(navigator.userAgent); // app de computador (qualquer versão)
+function shareAudioOptions(): AudioCaptureOptions {
+  const removeCall = getSettings().streamRemoveCall;
+  return {
+    echoCancellation: removeCall && isDesktopApp(),
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 2,
+    restrictOwnAudio: removeCall,
+    suppressLocalAudioPlayback: false,
+  } as AudioCaptureOptions;
+}
+
 export type ShareResolution = '720' | '1080' | '1440' | 'native';
 export type ShareFps = 15 | 30 | 60;
 export type ShareCodec = 'h264' | 'vp9' | 'av1';
@@ -479,11 +492,13 @@ export function useVoice(gateway: Gateway) {
     await lp.setScreenShareEnabled(
       true,
       {
-        // Áudio da transmissão: sem os filtros de voz (estragam música e jogo) e, onde o navegador
-        // deixa, sem o som do próprio Nexo. Senão quem assiste ouve a própria voz de volta (eco).
-        audio: opts.audio
-          ? ({ echoCancellation: false, noiseSuppression: false, autoGainControl: false, restrictOwnAudio: true, suppressLocalAudioPlayback: false } as AudioCaptureOptions)
-          : false,
+        // Áudio da transmissão: sem os filtros de voz (estragam música e jogo) e sem o som do próprio
+        // Nexo, senão quem assiste ouve a própria voz de volta (retorno).
+        // - Navegador: restrictOwnAudio tira o som da aba do Nexo do áudio do sistema.
+        // - App de computador: o Electron captura o som do Windows inteiro, com as vozes da call.
+        //   O cancelamento de eco do Chromium usa como referência exatamente o som que o Nexo está
+        //   tocando, e como a captura é digital (sem caixa de som no meio) ele consegue apagar as vozes.
+        audio: opts.audio ? shareAudioOptions() : false,
         systemAudio: opts.audio ? 'include' : 'exclude',
         // Nativa: sem limite de tamanho (largura 0 = sem teto), só o fps.
         resolution: { width: r.width, height: r.height, frameRate: opts.fps },
