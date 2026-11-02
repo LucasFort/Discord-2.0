@@ -247,16 +247,19 @@ function VoiceSettings() {
       <div className="field">
         <span>Supressão de ruído</span>
         <div className="options">
-          <button className={`option ${s.strongNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, noiseSuppression: true })}>Forte (IA)</button>
+          <button className={`option ${s.strongNoiseSuppression && s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: true, noiseSuppression: true })}>Máxima (IA)</button>
+          <button className={`option ${s.strongNoiseSuppression && !s.maxNoiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: true, maxNoiseSuppression: false, noiseSuppression: true })}>Forte (IA)</button>
           <button className={`option ${!s.strongNoiseSuppression && s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: true })}>Padrão</button>
           <button className={`option ${!s.strongNoiseSuppression && !s.noiseSuppression ? 'selected' : ''}`} onClick={() => updateSettings({ strongNoiseSuppression: false, noiseSuppression: false })}>Nenhuma</button>
         </div>
         <small className="muted">
-          {s.strongNoiseSuppression
-            ? 'Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise).'
-            : s.noiseSuppression
-              ? 'A supressão básica do navegador: tira ruído constante.'
-              : 'Sem filtro: bom para música ou microfone de estúdio.'}
+          {s.strongNoiseSuppression && s.maxNoiseSuppression
+            ? 'Passa a voz duas vezes pela IA: corta teclado, mouse, ventilador, TV e gente falando longe. Se sua voz ficar robótica, use a Forte.'
+            : s.strongNoiseSuppression
+              ? 'Tira chiado, ventilador, teclado e barulho de fundo até enquanto você fala (RNNoise).'
+              : s.noiseSuppression
+                ? 'A supressão básica do navegador: tira ruído constante.'
+                : 'Sem filtro: bom para música ou microfone de estúdio.'}
         </small>
       </div>
       <Toggle label="Cancelamento de eco" hint="Evita que o som das caixas volte pelo microfone." checked={s.echoCancellation} onChange={(v) => updateSettings({ echoCancellation: v })} />

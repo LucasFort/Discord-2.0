@@ -326,7 +326,17 @@ export function useVoice(gateway: Gateway) {
       micCtx ??= newAudioContext();
       if (micCtx.state !== 'running') await Promise.race([micCtx.resume(), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
       if (micCtx.state !== 'running') {
-        console.warn('Áudio do navegador parado: microfone vai sem processamento');
+        // Entrou sem clique (ex.: voltou sozinho depois de uma atualização): o navegador segura o
+        // áudio até a pessoa interagir. Enquanto isso o microfone vai direto, e no primeiro clique
+        // ou tecla a supressão de ruído entra de novo (antes ficava sem ela até sair da call).
+        console.warn('Áudio do navegador parado: microfone vai sem processamento até o primeiro clique');
+        const retry = () => {
+          window.removeEventListener('pointerdown', retry, true);
+          window.removeEventListener('keydown', retry, true);
+          void micCtx?.resume().then(() => (roomRef.current === room ? attachMicProcessor(room) : undefined)).catch(() => {});
+        };
+        window.addEventListener('pointerdown', retry, true);
+        window.addEventListener('keydown', retry, true);
         return;
       }
       await track.setAudioContext(micCtx);

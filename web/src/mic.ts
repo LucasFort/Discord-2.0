@@ -65,6 +65,9 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
   private speechLevel = -40; // média do nível da fala (dB, cru)
   private lastSpeech = 0;
   private denoise: AudioNode | null = null;
+  private denoise2: AudioNode | null = null; // segunda passada do RNNoise (supressão máxima)
+  private openTicks = 0; // ticks seguidos com cara de voz (abre o portão só depois de 2)
+  private freqBuf?: Float32Array<ArrayBuffer>;
   private pre?: AudioNode; // fim da etapa de filtros (antes do RNNoise)
   private post?: AudioNode; // começo da etapa depois do RNNoise
   private denoiseOn = false;
@@ -113,7 +116,9 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.post = post;
     this.denoise = await createRnnoise(audioContext);
     if (this.denoise) this.nodes.push(this.denoise);
-    this.route(getSettings().strongNoiseSuppression);
+    this.denoise2 = this.denoise ? await createRnnoise(audioContext) : null;
+    if (this.denoise2) this.nodes.push(this.denoise2);
+    this.route(getSettings().strongNoiseSuppression, getSettings().maxNoiseSuppression);
     this.gain = gain;
     this.boost = boost;
     this.gate = gate;
@@ -124,20 +129,51 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.timer = setInterval(() => this.tick(buf), 20);
   }
 
-  /** Liga ou desliga o RNNoise no caminho do som sem recriar nada. */
-  private route(strong: boolean) {
+  /**
+   * Liga ou desliga o RNNoise no caminho do som sem recriar nada.
+   * Na supressão máxima o som passa duas vezes pelo RNNoise: o que sobra de barulho
+   * da primeira passada (teclado, gente falando longe, TV) é cortado na segunda.
+   */
+  private route(strong: boolean, max: boolean) {
     const on = strong && !!this.denoise;
+    const twice = on && max && !!this.denoise2;
     if (!this.pre || !this.post) return;
     this.pre.disconnect();
     this.denoise?.disconnect();
-    if (on) {
+    this.denoise2?.disconnect();
+    if (twice) {
+      this.pre.connect(this.denoise!);
+      this.denoise!.connect(this.denoise2!);
+      this.denoise2!.connect(this.post);
+    } else if (on) {
       this.pre.connect(this.denoise!);
       this.denoise!.connect(this.post);
     } else this.pre.connect(this.post);
     this.denoiseOn = on;
     this.wantStrong = strong;
+    this.wantMax = max;
   }
   private wantStrong = false;
+  private wantMax = false;
+
+  /**
+   * Parte da energia que está na faixa da voz (150 a 3.400 Hz). Fala fica bem acima de 0,6;
+   * clique de teclado, mouse, batida na mesa e chiado espalham energia pelos agudos e ficam abaixo.
+   */
+  private voiceShare() {
+    const a = this.rawAnalyser!;
+    this.freqBuf ??= new Float32Array(a.frequencyBinCount);
+    a.getFloatFrequencyData(this.freqBuf);
+    const hz = this.ctx!.sampleRate / a.fftSize;
+    let voice = 0;
+    let total = 0;
+    for (let i = Math.floor(150 / hz); i < this.freqBuf.length && i * hz < 11000; i++) {
+      const e = 10 ** (this.freqBuf[i] / 10);
+      total += e;
+      if (i * hz <= 3400) voice += e;
+    }
+    return total > 0 ? voice / total : 0;
+  }
 
   // ---------- Eco ----------
   /** Nível (dB) do som que está saindo das caixas agora: vozes e transmissões dos outros. */
@@ -188,7 +224,7 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     const ctx = this.ctx!;
     const now = performance.now();
     this.gain!.gain.setTargetAtTime(s.inputVolume / 100, ctx.currentTime, 0.02);
-    if (s.strongNoiseSuppression !== this.wantStrong) this.route(s.strongNoiseSuppression);
+    if (s.strongNoiseSuppression !== this.wantStrong || s.maxNoiseSuppression !== this.wantMax) this.route(s.strongNoiseSuppression, s.maxNoiseSuppression);
 
     // Nível cru (depois do volume de entrada, antes da amplificação automática).
     const raw = this.measure(this.rawAnalyser!, buf);
@@ -204,7 +240,7 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.noiseFloor = raw < this.noiseFloor ? raw : echoRisk ? this.noiseFloor : Math.min(this.noiseFloor + 0.02, -20);
     // Com risco de eco a voz precisa chegar perto do volume normal da sua fala; o eco que sobra
     // depois do cancelamento é bem mais baixo e fica de fora. Falar por cima dos outros continua passando.
-    const speaking = raw > this.noiseFloor + 9 && raw > -95 && (!echoRisk || raw > this.speechLevel - 9);
+    const speaking = raw > this.noiseFloor + 10 && raw > -95 && (!echoRisk || raw > this.speechLevel - 9);
     if (speaking) {
       this.lastSpeech = now;
       this.speechLevel += (raw - this.speechLevel) * 0.03;
@@ -227,7 +263,12 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
       open = now - this.lastPtt <= s.pttReleaseDelay;
     } else {
       const loud = s.autoSensitivity ? speaking : this.level > s.sensitivity;
-      if (loud) this.lastLoud = now;
+      // Para abrir o portão o som precisa parecer voz por 40 ms seguidos: estalo, clique e batida
+      // são curtos ou espalhados nos agudos e não abrem. Com o portão aberto, só o volume conta
+      // (assim o "s" e o fim das palavras não são cortados).
+      const wasOpen = now - this.lastLoud < 400;
+      this.openTicks = loud && (wasOpen || s.strongNoiseSuppression === false || this.voiceShare() > 0.6) ? this.openTicks + 1 : 0;
+      if (loud && (wasOpen || this.openTicks >= 2)) this.lastLoud = now;
       open = now - this.lastLoud < 400; // segura um pouco para não cortar o fim das palavras
     }
     if (open !== this.open) this.gate!.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.005 : 0.05);
@@ -251,7 +292,8 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.remote.forEach((n) => n.src.disconnect());
     this.remote.clear();
     (this.denoise as RnnoiseWorkletNode | null)?.destroy?.();
-    this.denoise = null;
+    (this.denoise2 as RnnoiseWorkletNode | null)?.destroy?.();
+    this.denoise = this.denoise2 = null;
     this.pre = this.post = undefined;
     this.nodes.forEach((n) => n.disconnect());
     this.nodes = [];

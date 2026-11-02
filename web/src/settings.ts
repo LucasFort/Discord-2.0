@@ -13,6 +13,7 @@ export type Settings = {
   autoGainControl: boolean;
   autoBoost: boolean; // amplifica sozinho microfone baixo
   strongNoiseSuppression: boolean; // RNNoise (tira chiado e barulho de fundo)
+  maxNoiseSuppression: boolean; // RNNoise duas vezes (corta até teclado e gente falando longe)
   echoGate: boolean; // segura o microfone enquanto os outros falam e o seu som é só eco
   inputMode: 'voice' | 'ptt';
   pttKey: string; // KeyboardEvent.code, ex.: 'KeyV'
@@ -47,6 +48,7 @@ const DEFAULTS: Settings = {
   autoGainControl: true,
   autoBoost: true,
   strongNoiseSuppression: true,
+  maxNoiseSuppression: true,
   echoGate: true,
   inputMode: 'voice',
   pttKey: '',
