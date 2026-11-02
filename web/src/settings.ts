@@ -18,6 +18,8 @@ export type Settings = {
   inputMode: 'voice' | 'ptt';
   pttKey: string; // KeyboardEvent.code, ex.: 'KeyV'
   pttReleaseDelay: number; // ms
+  muteKey: string; // atalho para mutar/desmutar, ex.: 'Ctrl+Shift+KeyM' ('' = nenhum)
+  deafenKey: string; // atalho para ensurdecer, ex.: 'Ctrl+Shift+KeyD'
   autoSensitivity: boolean;
   sensitivity: number; // dB, -100 a 0
   userVolumes: Record<string, number>; // id do usuário -> 0–200 (%)
@@ -53,6 +55,8 @@ const DEFAULTS: Settings = {
   inputMode: 'voice',
   pttKey: '',
   pttReleaseDelay: 200,
+  muteKey: 'Ctrl+Shift+KeyM',
+  deafenKey: 'Ctrl+Shift+KeyD',
   autoSensitivity: true,
   sensitivity: -50,
   userVolumes: {},
@@ -138,6 +142,52 @@ export function keyName(code: string) {
     ShiftLeft: 'Shift esq.', ShiftRight: 'Shift dir.', AltLeft: 'Alt', AltRight: 'AltGr', Tab: 'Tab',
   };
   return names[code] ?? code;
+}
+
+// ---------- Atalhos (combinação de teclas) ----------
+const MODS = ['Ctrl', 'Alt', 'Shift', 'Meta'] as const;
+const MOD_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/;
+
+/** Combinação apertada, como 'Ctrl+Shift+KeyM'. null enquanto só um modificador está apertado. */
+export function comboFromEvent(e: KeyboardEvent): string | null {
+  if (MOD_CODES.test(e.code)) return null;
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Meta'].filter(Boolean);
+  return [...mods, e.code].join('+');
+}
+
+/** Nome legível: 'Ctrl+Shift+KeyM' -> 'Ctrl + Shift + M'. */
+export function comboName(combo: string) {
+  if (!combo) return 'Nenhum';
+  return combo
+    .split('+')
+    .map((p) => ((MODS as readonly string[]).includes(p) ? p : keyName(p)))
+    .join(' + ');
+}
+
+/**
+ * Converte para o formato de atalho global do app de computador (Electron), ex.: 'CommandOrControl+Shift+M'.
+ * Devolve '' para teclas que o Electron não aceita como atalho global.
+ */
+export function comboToAccelerator(combo: string) {
+  if (!combo) return '';
+  const parts = combo.split('+');
+  const code = parts.pop()!;
+  const mods = parts.map((m) => (m === 'Ctrl' ? 'CommandOrControl' : m === 'Meta' ? 'Super' : m));
+  let key = '';
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F\d{1,2}$/.test(code)) key = code;
+  else if (/^Numpad\d$/.test(code)) key = 'num' + code.slice(6);
+  else {
+    const map: Record<string, string> = {
+      Space: 'Space', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\',
+      Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Insert: 'Insert', Delete: 'Delete', Home: 'Home',
+      End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+      Pause: 'Pause', ScrollLock: 'Scrolllock', NumpadAdd: 'numadd', NumpadSubtract: 'numsub', NumpadMultiply: 'nummult', NumpadDivide: 'numdiv',
+    };
+    key = map[code] ?? '';
+  }
+  return key ? [...mods, key].join('+') : '';
 }
 
 // ---------- Aperte para falar ----------

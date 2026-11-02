@@ -4,9 +4,10 @@
  * - seletor de tela/janela com miniaturas para a transmissão;
  * - áudio do sistema na transmissão (Windows);
  * - links externos abrem no navegador padrão;
- * - uma janela só (abrir de novo traz a janela existente para a frente).
+ * - uma janela só (abrir de novo traz a janela existente para a frente);
+ * - atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco).
  */
-const { app, BrowserWindow, desktopCapturer, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, shell } = require('electron');
 const path = require('node:path');
 
 const APP_URL = process.env.NEXO_URL || require('./package.json').nexoUrl;
@@ -38,7 +39,7 @@ function createWindow() {
     title: 'Nexo',
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
+    webPreferences: { preload: path.join(__dirname, 'preload-main.cjs'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
   win.loadURL(APP_URL);
   win.on('closed', () => (win = null));
@@ -100,6 +101,24 @@ function pickSource(sources) {
     picker.loadFile(path.join(__dirname, 'picker.html'));
   });
 }
+
+// Atalhos globais pedidos pelo site (Configurações > Voz > Atalhos).
+ipcMain.handle('shortcuts:set', (e, keys) => {
+  if (!win || e.sender !== win.webContents || !e.sender.getURL().startsWith(APP_ORIGIN)) return { mute: false, deafen: false };
+  globalShortcut.unregisterAll();
+  const result = { mute: false, deafen: false };
+  for (const name of ['mute', 'deafen']) {
+    const accel = typeof keys?.[name] === 'string' ? keys[name] : '';
+    if (!accel) continue;
+    try {
+      result[name] = globalShortcut.register(accel, () => win && win.webContents.send('shortcut', name));
+    } catch {
+      result[name] = false; // atalho inválido ou já usado por outro programa: o site trata com a janela em foco
+    }
+  }
+  return result;
+});
+app.on('will-quit', () => globalShortcut.unregisterAll());
 
 app.whenReady().then(() => {
   const ses = session.defaultSession;

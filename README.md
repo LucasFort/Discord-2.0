@@ -25,7 +25,8 @@ Testado ponta a ponta com dois navegadores: chat, voz e transmissão 1080p chega
 O app (pasta `desktop/`, feito em Electron) abre o Nexo numa janela própria e adiciona:
 - seletor de tela ou janela com miniaturas na hora de transmitir;
 - áudio do computador na transmissão (Windows);
-- links externos abrindo no navegador.
+- links externos abrindo no navegador;
+- atalhos globais de mutar e ensurdecer (funcionam com o jogo em foco).
 
 **Para baixar:** https://github.com/LucasFort/Discord-2.0/releases/latest (Windows `.exe`, Linux `.AppImage`). Mande esse link para os amigos.
 

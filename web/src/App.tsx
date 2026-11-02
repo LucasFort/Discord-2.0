@@ -8,6 +8,7 @@ import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
 import { useUpdateAvailable } from './update';
+import { useVoiceShortcuts } from './shortcuts';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings } from './settings';
@@ -79,6 +80,7 @@ function Auth({ onDone }: { onDone: () => void }) {
 function Main({ onLogout }: { onLogout: () => void }) {
   const { state, dispatch, gateway, failures } = useStore(onLogout);
   const voice = useVoice(gateway);
+  useVoiceShortcuts({ mute: () => void voice.toggleMute(), deafen: () => voice.toggleDeafen() });
 
   // Conta para todo mundo em qual canal de voz estamos e se estamos mutados, ensurdecidos,
   // transmitindo ou com câmera (aparece na lista ao lado). Repete quando a conexão volta.
