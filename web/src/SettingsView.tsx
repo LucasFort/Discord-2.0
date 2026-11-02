@@ -367,6 +367,12 @@ function StreamSettings() {
       <h3>Áudio e quem assiste</h3>
       <Toggle label="Transmitir o áudio junto" hint="Som do jogo, vídeo ou aba que você está mostrando." checked={s.streamAudio} onChange={(v) => updateSettings({ streamAudio: v })} />
       <Toggle
+        label="Tirar as vozes da call do som da transmissão"
+        hint="Quem assiste não ouve a própria voz (nem a sua) de volta pela transmissão. Se o som do jogo ficar estranho, desligue."
+        checked={s.streamRemoveCall}
+        onChange={(v) => updateSettings({ streamRemoveCall: v })}
+      />
+      <Toggle
         label="Assistir transmissões automaticamente"
         hint="Começa a ver a tela de quem transmitir sem precisar clicar em Assistir. Usa mais internet."
         checked={s.autoWatchStreams}

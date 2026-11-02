@@ -37,6 +37,7 @@ export type Settings = {
   streamAudio: boolean;
   streamCodec: 'h264' | 'vp9' | 'av1';
   autoWatchStreams: boolean; // começa a assistir sozinho quando alguém transmite
+  streamRemoveCall: boolean; // tira a voz da call do som da transmissão (eco de quem assiste)
   streamVolumes: Record<string, number>; // id de quem transmite -> 0–100 (%) do áudio da transmissão
 };
 
@@ -74,6 +75,7 @@ const DEFAULTS: Settings = {
   streamAudio: true,
   streamCodec: 'h264',
   autoWatchStreams: false,
+  streamRemoveCall: true,
   streamVolumes: {},
 };
 
@@ -94,7 +96,7 @@ export const getSettings = () => current;
 
 /** Volta as opções de voz para o padrão, sem mexer em volumes de pessoas, transmissão e sons. */
 export function resetVoiceSettings() {
-  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams'];
+  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams', 'streamRemoveCall'];
   const next = { ...DEFAULTS } as Record<string, unknown>;
   for (const k of keep) next[k] = current[k];
   updateSettings(next as Partial<Settings>);
