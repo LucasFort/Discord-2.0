@@ -296,3 +296,6 @@ input.switch:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .sound-row { display: flex; align-items: center; gap: 8px; }
 .sound-row .toggle-row { flex: 1; }
+
+.update-bar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-radius: 12px; background: var(--bg-1); color: var(--text-strong); border: 1px solid var(--accent); box-shadow: 0 12px 32px rgba(0, 0, 0, .5); font-size: 14px; max-width: calc(100vw - 32px); flex-wrap: wrap; animation: toast-in .2s ease-out; }
+.update-bar button { padding: 6px 12px; }

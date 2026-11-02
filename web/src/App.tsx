@@ -7,6 +7,7 @@ import {
 import { api, API_MISSING, APP_NAME, getToken, REACTIONS, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { useToasts } from './toast';
+import { useUpdateAvailable } from './update';
 import { ask, AskHost } from './ask';
 import { SettingsView } from './SettingsView';
 import { updateSettings, useSettings } from './settings';
@@ -22,7 +23,14 @@ export function App() {
     setToken(null);
     setAuthed(false);
   }, []);
-  return authed ? <Main onLogout={logout} /> : <Auth onDone={() => setAuthed(true)} />;
+  return authed ? (
+    <Main onLogout={logout} />
+  ) : (
+    <>
+      <Auth onDone={() => setAuthed(true)} />
+      <UpdateWatcher />
+    </>
+  );
 }
 
 // ---------------------------------------------------------------- Login
@@ -87,6 +95,19 @@ function Main({ onLogout }: { onLogout: () => void }) {
     setSounds(!sounds);
     if (!sounds) playSound('join');
   };
+
+  // Atualizou no meio da call: entra de novo no mesmo canal de voz sozinho.
+  useEffect(() => {
+    if (!state.ready) return;
+    const rejoin = sessionStorage.getItem(REJOIN_KEY);
+    if (!rejoin) return;
+    sessionStorage.removeItem(REJOIN_KEY);
+    if (state.guilds.some((g) => g.channels.some((c) => c.id === rejoin))) {
+      void voice.join(rejoin);
+      setView('voice');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.ready]);
 
   const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
@@ -196,6 +217,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
       {guild && view === 'text' && <MemberList guild={guild} state={state} />}
       <Toasts />
+      <UpdateWatcher voiceChannelId={voice.channelId} sharing={voice.sharing} />
       <AskHost />
       {settingsOpen && <SettingsView onClose={() => { setSettingsOpen(false); setSounds(soundsEnabled()); }} />}
     </div>
@@ -771,6 +793,58 @@ function VideoTrack({ track, contain, mirror }: { track: Track; contain?: boolea
     return () => void track.detach(el);
   }, [track]);
   return <video ref={ref} className={`${contain ? 'contain' : ''} ${mirror ? 'mirror' : ''}`} autoPlay playsInline muted />;
+}
+
+const REJOIN_KEY = 'nexo.rejoinVoice';
+
+/**
+ * Quando sai versão nova, recarrega o app sozinho. Fora da call: em 5 segundos (espera se você
+ * estiver digitando). Na call: em 10 segundos e já volta para o mesmo canal de voz. Transmitindo:
+ * só avisa, para não derrubar a transmissão, e atualiza quando ela acabar.
+ */
+function UpdateWatcher({ voiceChannelId = null, sharing = false }: { voiceChannelId?: string | null; sharing?: boolean }) {
+  const available = useUpdateAvailable();
+  const [left, setLeft] = useState<number | null>(null);
+  const reload = useCallback(() => {
+    try {
+      if (voiceChannelId) sessionStorage.setItem(REJOIN_KEY, voiceChannelId);
+    } catch {
+      /* ignora */
+    }
+    location.reload();
+  }, [voiceChannelId]);
+
+  useEffect(() => {
+    if (!available || sharing) return setLeft(null);
+    let n = voiceChannelId ? 10 : 5;
+    setLeft(n);
+    const t = setInterval(() => {
+      // Não atualiza no meio de uma mensagem sendo escrita.
+      const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.type !== 'range' && !!el.value;
+      if (typing) return;
+      n -= 1;
+      setLeft(n);
+      if (n <= 0) {
+        clearInterval(t);
+        reload();
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [available, sharing, voiceChannelId, reload]);
+
+  if (!available) return null;
+  return (
+    <div className="update-bar">
+      <strong>Nova versão do Nexo.</strong>{' '}
+      {sharing
+        ? 'Atualiza quando você parar de transmitir.'
+        : voiceChannelId
+          ? `Atualizando em ${left ?? 0}s, você volta para a call sozinho.`
+          : `Atualizando em ${left ?? 0}s…`}
+      <button className="primary" onClick={reload}>Atualizar agora</button>
+    </div>
+  );
 }
 
 function Toasts() {

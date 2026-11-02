@@ -268,6 +268,12 @@ export function useVoice(gateway: Gateway) {
           alert(`Entrou na call sem microfone: ${(e as Error).message}. Libere o microfone no cadeado da barra de endereço.`);
         }
         await room.startAudio().catch(() => {});
+        // Entrou sem clique (ex.: voltou sozinho depois de uma atualização): o navegador pode
+        // segurar o som até o primeiro clique na página.
+        if (!room.canPlaybackAudio) {
+          toast('Clique em qualquer lugar para ouvir a call');
+          window.addEventListener('pointerdown', () => void room.startAudio().catch(() => {}), { once: true });
+        }
         setChannelId(id);
         setReconnecting(false);
         if (rejoinTries.current === 0) playSound('join'); // reconexão automática não toca de novo
