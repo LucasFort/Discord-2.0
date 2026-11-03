@@ -132,6 +132,7 @@ export function useVoice(gateway: Gateway) {
   const [connecting, setConnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const leavingRef = useRef(false); // true quando a pessoa clicou em sair (não reconectar)
+  const connectingTo = useRef<string | null>(null); // canal que está conectando agora
   const rejoinTries = useRef(0);
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -168,6 +169,7 @@ export function useVoice(gateway: Gateway) {
 
   const leave = useCallback(async () => {
     leavingRef.current = true;
+    connectingTo.current = null;
     nativeAudio.current?.stop();
     nativeAudio.current = null;
     const room = roomRef.current;
@@ -187,9 +189,14 @@ export function useVoice(gateway: Gateway) {
 
   const join = useCallback(
     async (id: string) => {
+      // Já entrando nesse canal (clique duplo, ou a volta automática junto com um clique): ignora.
+      // Antes o segundo clique derrubava a conexão em andamento e aparecia "Client initiated disconnect".
+      if (connectingTo.current === id) return;
       if (roomRef.current) await leave();
+      connectingTo.current = id;
       leavingRef.current = false;
       setConnecting(true);
+      let started: Room | null = null; // a sala desta tentativa (para o erro não derrubar outra)
       // Cria o áudio ainda dentro do clique (o navegador só libera som que começa num clique).
       if (needsMicProcessor(getSettings())) {
         micCtx ??= newAudioContext();
@@ -212,6 +219,7 @@ export function useVoice(gateway: Gateway) {
           videoCaptureDefaults: getSettings().videoDeviceId ? { deviceId: getSettings().videoDeviceId } : undefined,
         });
         roomRef.current = room;
+        started = room;
 
         room
           .on(RoomEvent.TrackPublished, (pub, participant) => {
@@ -319,11 +327,18 @@ export function useVoice(gateway: Gateway) {
         rejoinTries.current = 0;
         gateway.send({ op: 'voice_state', channel_id: id });
       } catch (e) {
-        await roomRef.current?.disconnect();
-        roomRef.current = null;
+        // Outra entrada (outro canal, sair) começou no meio desta: ela já cuida de tudo, sem aviso.
+        // Só desconecta se a sala ainda é esta, senão derrubava a conexão nova.
+        if (connectingTo.current !== id || (roomRef.current && roomRef.current !== started)) return;
+        await started?.disconnect().catch(() => {});
+        if (roomRef.current === started) roomRef.current = null;
         alert(`Não foi possível entrar na voz: ${(e as Error).message}`);
       } finally {
-        setConnecting(false);
+        // Só a tentativa mais recente mexe no "conectando" (ou nenhuma, se a pessoa saiu no meio).
+        if (connectingTo.current === id || connectingTo.current === null) {
+          connectingTo.current = null;
+          setConnecting(false);
+        }
       }
     },
     [gateway, leave, muted, rerender, addFloating],
