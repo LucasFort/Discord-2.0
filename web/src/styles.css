@@ -775,3 +775,95 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @keyframes dj-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 109, .45), 0 10px 30px rgba(0, 0, 0, .45); } 50% { box-shadow: 0 0 0 10px rgba(255, 77, 109, 0), 0 10px 30px rgba(0, 0, 0, .45); } }
 @media (prefers-reduced-motion: reduce) { .dj-tile.playing .dj-avatar, .dj-bars i { animation: none; } .dj-bars i { height: 8px; } }
 .music-section-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Criar servidor, convites e adicionar amigo ---------- */
+.modal { position: relative; }
+.modal-x { position: absolute; top: 12px; right: 12px; }
+.modal-actions.spread { justify-content: space-between; align-items: center; }
+.modal-actions .link { display: inline-flex; align-items: center; gap: 4px; }
+.create-server { width: min(460px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.cs-head { text-align: center; padding: 6px 12px 4px; }
+.cs-head h2 { font-size: 24px; }
+.cs-head p { margin: 6px 0 0; font-size: 14px; line-height: 1.45; }
+.cs-list { display: flex; flex-direction: column; gap: 8px; }
+.create-server h3 { margin: 6px 0 0; }
+.cs-option { display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px 14px 10px 10px; text-align: left; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; justify-content: flex-start; }
+.cs-option:hover { background: var(--bg-hover); border-color: var(--accent); }
+.cs-option > svg { color: var(--text-muted); flex: none; }
+.cs-option-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; color: white; flex: none; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .2); }
+.cs-option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cs-option-text strong { color: var(--text-strong); font-size: 15px; }
+.cs-option-text small { color: var(--text-muted); font-size: 12.5px; font-weight: 400; line-height: 1.35; }
+.cs-foot { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; display: flex; flex-direction: column; gap: 8px; }
+.cs-foot h3 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text-strong); }
+.cs-join { width: 100%; }
+.cs-upload-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.cs-upload { position: relative; width: 84px; height: 84px; border-radius: 50%; border: 2px dashed var(--text-muted); background: none; color: var(--text-muted); flex-direction: column; gap: 2px; padding: 0; }
+.cs-upload small { font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+.cs-upload:hover { border-color: var(--accent-2); color: var(--accent-2); background: var(--accent-soft); }
+.cs-upload.has { border: 0; }
+.cs-upload img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.cs-upload-plus { position: absolute; top: -2px; right: -2px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: white; display: grid; place-items: center; font-weight: 700; font-size: 16px; line-height: 1; }
+.cs-preview { background: var(--bg-0); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.cs-preview-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cs-preview-head strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
+.guild.small { width: 32px; height: 32px; font-size: 12px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; }
+.guild.small .guild-img, .invite-card-body .guild-img { width: 100%; height: 100%; object-fit: cover; }
+.cs-tag { font-size: 11px; font-weight: 700; color: #0b0d12; padding: 2px 8px; border-radius: 99px; flex: none; }
+.cs-preview-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cs-preview-cols > div { display: flex; flex-direction: column; gap: 4px; }
+.cs-preview-cols span { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.small-print { font-size: 11.5px; margin: 0; text-align: center; }
+.cs-hint { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.cs-hint strong { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.cs-hint code { color: var(--text); }
+.invite-card-body { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.invite-card-body .guild { width: 48px; height: 48px; border-radius: 14px; overflow: hidden; display: grid; place-items: center; flex: none; }
+.invite-card-body > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.invite-card-body strong { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invite-counts { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); }
+.invite-counts .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); display: inline-block; }
+.invite-counts .dot.on { background: var(--ok); }
+.invite-counts .dot:not(.on) { margin-left: 6px; }
+.invite-embed { margin-top: 6px; max-width: 432px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.invite-embed p { margin: 0; font-size: 13px; }
+.invite-embed-title { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text-muted); }
+.invite-embed-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+button.ok-button { background: var(--ok); color: #06231a; font-weight: 600; }
+button.ok-button:hover { filter: brightness(1.08); background: var(--ok); }
+button.ok-outline { background: none; border: 1px solid var(--ok); color: var(--ok); padding: 6px 14px; }
+button.ok-outline:hover { background: var(--ok); color: #06231a; }
+button.sent { background: none; color: var(--text-muted); padding: 6px 14px; }
+.invite-modal { width: min(480px, 100%); display: flex; flex-direction: column; gap: 10px; }
+.invite-modal h2 { padding-right: 32px; }
+.invite-modal > p.muted { margin: 0; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.invite-search { display: flex; align-items: center; gap: 8px; background: var(--bg-0); border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; color: var(--text-muted); }
+.invite-search input { border: 0; background: none; padding: 10px 0; }
+.invite-friends { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; }
+.invite-friend { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; }
+.invite-friend:hover { background: var(--bg-hover); }
+.invite-friend-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.invite-friend-name strong { color: var(--text-strong); font-size: 14px; }
+.invite-friend-name small { color: var(--text-muted); font-size: 12px; }
+.invite-inside { font-size: 12px; }
+.invite-empty { padding: 16px 8px; text-align: center; font-size: 13px; }
+.invite-modal h3 { margin: 10px 0 0; }
+.invite-link-box { display: flex; align-items: center; gap: 8px; background: var(--bg-0); border: 1px solid var(--line); border-radius: 10px; padding: 4px 4px 4px 12px; color: var(--text-muted); }
+.invite-link-box input { border: 0; background: none; padding: 8px 0; font-size: 14px; }
+.invite-link-box button { flex: none; padding: 8px 14px; }
+.invite-expiry { margin: 0; font-size: 12px; }
+.invite-expiry .link { padding: 0; font-size: 12px; }
+.invite-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.invite-edit > button { grid-column: 1 / -1; }
+.share-me { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 12px 14px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; }
+.share-me-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.share-me strong { color: var(--text-strong); font-size: 14px; }
+.share-me small { font-size: 12px; }
+.suggest-title { margin: 26px 0 10px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.suggest-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.suggest-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 14px; text-align: center; min-width: 0; }
+.suggest-card strong { color: var(--text-strong); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-card small { font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-card button { margin-top: 4px; width: 100%; padding: 7px 10px; }
+.suggest-avatar { cursor: pointer; }
+@media (max-width: 520px) { .invite-edit { grid-template-columns: 1fr; } }

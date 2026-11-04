@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Check, MessageCircle, Phone, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { Check, Copy, MessageCircle, Phone, UserMinus, UserPlus, Users, X } from 'lucide-react';
 import { api, dmOther, isDm, type Guild, type Presence, type Relationship, type User } from './api';
 import { Avatar, openProfile, ProfileBody } from './profile';
 import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { toast } from './toast';
 import type { State } from './store';
+import { friendSuggestions } from './servers';
 
 /**
  * Amigos e mensagens diretas, como a tela inicial do Discord:
@@ -124,7 +125,7 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
         </nav>
       </header>
       {tab === 'add' ? (
-        <AddFriend />
+        <AddFriend state={state} presenceOf={presenceOf} />
       ) : (
         <div className="friends-list">
           <div className="section">{title} — {list.length}</div>
@@ -176,7 +177,11 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
 
 const STATUS_TEXT: Record<Presence, string> = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', offline: 'Offline' };
 
-function AddFriend() {
+function AddFriend({ state, presenceOf }: { state: State; presenceOf: (id: string) => Presence }) {
+  const me = state.user!;
+  const suggestions = friendSuggestions(state, me.id).slice(0, 12);
+  const [asked, setAsked] = useState<Record<string, boolean>>({});
+  const [copied, setCopied] = useState(false);
   const [username, setUsername] = useState('');
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -210,6 +215,49 @@ function AddFriend() {
         <button className="primary" disabled={!username.trim() || busy}>Enviar pedido</button>
       </div>
       {result && <p className={result.ok ? 'ok' : 'error'}>{result.text}</p>}
+      <div className="share-me">
+        <Avatar user={me} size={40} />
+        <span className="share-me-text">
+          <strong>Seu nome de usuário é @{me.username}</strong>
+          <small className="muted">Mande para seus amigos te adicionarem.</small>
+        </span>
+        <button
+          type="button"
+          onClick={async () => {
+            await navigator.clipboard?.writeText(me.username).catch(() => {});
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        >
+          {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+        </button>
+      </div>
+      {suggestions.length > 0 && (
+        <>
+          <h3 className="suggest-title">Talvez você conheça</h3>
+          <div className="suggest-grid">
+            {suggestions.map(({ user, guilds }) => (
+              <div key={user.id} className="suggest-card">
+                <span className="suggest-avatar" onClick={(e) => openProfile(user, e)}><Avatar user={user} size={56} status={presenceOf(user.id)} /></span>
+                <strong>{user.display_name}</strong>
+                <small className="muted" title={guilds.join(', ')}>{guilds.length === 1 ? `Em ${guilds[0]}` : `${guilds.length} servidores em comum`}</small>
+                <button
+                  type="button"
+                  className={asked[user.id] ? '' : 'primary'}
+                  disabled={asked[user.id]}
+                  onClick={() =>
+                    addFriend({ user_id: user.id })
+                      .then(() => setAsked((a) => ({ ...a, [user.id]: true })))
+                      .catch((e) => toast((e as Error).message, 'error'))
+                  }
+                >
+                  {asked[user.id] ? 'Pedido enviado' : <><UserPlus size={14} /> Adicionar</>}
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </form>
   );
 }
