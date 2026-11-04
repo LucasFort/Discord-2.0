@@ -23,7 +23,11 @@ async function createRnnoise(ctx: AudioContext): Promise<AudioNode | null> {
     rnnoiseWasm ??= loadRnnoise({ url: rnnoiseWasmPath, simdUrl: rnnoiseSimdWasmPath });
     if (!workletReady.has(ctx)) workletReady.set(ctx, ctx.audioWorklet.addModule(rnnoiseWorkletPath));
     const [wasmBinary] = await Promise.all([rnnoiseWasm, workletReady.get(ctx)]);
-    return new RnnoiseWorkletNode(ctx, { wasmBinary, maxChannels: 1 });
+    const node = new RnnoiseWorkletNode(ctx, { wasmBinary, maxChannels: 1 });
+    // Só processa um canal: força a entrada em mono para não sobrar um canal mudo na saída.
+    node.channelCount = 1;
+    node.channelCountMode = 'explicit';
+    return node;
   } catch (e) {
     console.warn('Supressão de ruído forte indisponível', e);
     rnnoiseWasm = null;
@@ -118,6 +122,12 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     this.ctx = audioContext;
     const src = audioContext.createMediaStreamSource(new MediaStream([track]));
     const gain = audioContext.createGain();
+    // Voz é mono. Alguns microfones (headsets USB, webcams) chegam em estéreo, às vezes com um lado vazio;
+    // o RNNoise só limpa o primeiro canal e o outro saía mudo: quem ouvia escutava a voz só de um lado.
+    // Mistura tudo em mono logo na entrada, e o que vai para a call também é mono (toca nos dois ouvidos).
+    gain.channelCount = 1;
+    gain.channelCountMode = 'explicit';
+    gain.channelInterpretation = 'speakers';
     // Corta o zumbido grave (ventilador, rede elétrica) e o chiado muito agudo, fora da faixa da voz.
     const highpass = audioContext.createBiquadFilter();
     highpass.type = 'highpass';
@@ -142,6 +152,8 @@ export class MicProcessor implements TrackProcessor<Track.Kind.Audio, AudioProce
     const gate = audioContext.createGain();
     gate.gain.value = 0;
     const dest = audioContext.createMediaStreamDestination();
+    dest.channelCount = 1;
+    dest.channelCountMode = 'explicit';
     src.connect(gain);
     gain.connect(highpass);
     highpass.connect(lowpass);

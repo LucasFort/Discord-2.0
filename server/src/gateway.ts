@@ -21,6 +21,7 @@ const serverMod = new Map<string, { mute: boolean; deaf: boolean }>();
 export const getServerMod = (guildId: string, userId: string) => serverMod.get(`${guildId}:${userId}`) ?? { mute: false, deaf: false };
 export const voiceStateOf = (userId: string) => voiceStates.get(userId);
 export const channelHasPeople = (channelId: string) => [...voiceStates.values()].some((v) => v.channelId === channelId);
+export const usersInVoice = (channelId: string) => [...voiceStates.values()].filter((v) => v.channelId === channelId).map((v) => v.userId);
 
 /** Muda o silenciar/ensurdecer do servidor e avisa todo mundo se a pessoa está na voz desse servidor. */
 export async function setServerMod(guildId: string, userId: string, patch: Partial<{ mute: boolean; deaf: boolean }>) {
@@ -171,7 +172,7 @@ export function registerGateway(app: FastifyInstance) {
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))
               .map(voicePayload),
-            music: musicStatesFor(new Set(guilds.map((g) => g.id))),
+            music: musicStatesFor(new Set(guilds.flatMap((g) => g.channels.map((c) => c.id)))),
           },
         }),
       );
@@ -185,7 +186,7 @@ export function registerGateway(app: FastifyInstance) {
       await ready;
       const u = user;
       if (!u) return;
-      let msg: { op?: string; channel_id?: string | null; idle?: boolean; action?: string; url?: string; track_id?: string; position?: number };
+      let msg: { op?: string; channel_id?: string | null; idle?: boolean; action?: string; url?: string; track_id?: string; position?: number; mode?: string };
       try {
         msg = JSON.parse(String(raw));
       } catch {

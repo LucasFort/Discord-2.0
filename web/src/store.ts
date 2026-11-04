@@ -31,6 +31,7 @@ export type MusicState = {
   playing: boolean;
   position: number; // segundos no instante updated_at (relógio do servidor)
   updated_at: number;
+  loop?: 'off' | 'one' | 'all'; // repetir
   server_now: number;
 };
 /** Diferença entre o relógio do servidor e o meu, para todo mundo ouvir no mesmo ponto da música. */
@@ -314,6 +315,7 @@ export function useStore(onUnauthorized: () => void) {
           }
           if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
           if (msg.t === 'MUSIC_ERROR') return toast(msg.d?.message ?? 'Não deu para tocar essa música.', 'error');
+          if (msg.t === 'MUSIC_NOTICE') return toast(msg.d.text);
           if (msg.t === 'MUSIC_ADDED') return toast(msg.d.position > 0 ? `Na fila (${msg.d.position}º): ${msg.d.title}` : `Tocando: ${msg.d.title}`);
           const dmText = (gs: Guild[]) => gs.filter((g) => Number(g.is_dm)).flatMap((g) => g.channels.filter((c) => c.type === 'text').map((c) => c.id));
           if (msg.t === 'READY') setDirectChannels(dmText(msg.d.guilds));
