@@ -16,6 +16,7 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Sons: entrada e saída na call, mutar e desmutar, mensagem nova com a aba em segundo plano (o sino na barra do usuário desliga)
 - Avisos na tela ("fulano entrou na call") e emojis que sobem flutuando na call para todo mundo
 - Lista de membros online e offline
+- **Amigos e mensagens diretas**: botão inicial (logo no topo da barra) com a lista de amigos (Online, Todos, Pendentes), adicionar amigo pelo nome de usuário ou pelo cartão de perfil, aceitar, recusar, cancelar e desfazer amizade; conversa direta com tudo do chat (anexos, reações, fixar, busca) e chamada de voz/vídeo/tela com o botão de telefone; toda mensagem direta conta como menção (bolinha vermelha e aviso na área de trabalho)
 - Voz: entrar e sair, silenciar, ensurdecer, indicador de quem está falando, supressão de ruído e cancelamento de eco, lista de quem está em cada canal de voz na barra lateral
 - Câmera
 - **Conta e perfil** como no Discord: nome de exibição, usuário, senha, foto, banner, pronomes, "sobre mim" e status personalizado; cartão de perfil ao clicar em alguém
@@ -111,4 +112,4 @@ web/src/
 
 ## Próximos passos (fase 2 do roadmap)
 
-Cargos e permissões, amigos e DMs, respostas, anexos, notificações, aperte para falar, versão para Mac.
+Cargos e permissões, bloquear pessoas, conversas em grupo, versão para Mac.

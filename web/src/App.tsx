@@ -3,10 +3,11 @@ import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
-  ChevronDown, DoorOpen, Music,
+  ChevronDown, DoorOpen, Music, MessageCircle, Check,
 } from 'lucide-react';
+import { addFriend, DmProfilePanel, dmGuilds, dmText, dmVoice, FriendsView, HomeSidebar, homeBadge, openDm } from './friends';
 import { MusicMiniPlayer, MusicPanel } from './music';
-import { api, API_MISSING, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { api, API_MISSING, APP_NAME, dmOther, getToken, isDm, ownsGuild, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
 import { useUpdateAvailable } from './update';
@@ -166,7 +167,13 @@ function Main({ onLogout }: { onLogout: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.ready]);
 
-  const guild = state.guilds.find((g) => g.id === guildId) ?? state.guilds[0];
+  // Servidores de verdade na barra da esquerda; conversas diretas ficam na tela inicial (Amigos).
+  const servers = state.guilds.filter((g) => !isDm(g));
+  const selected = state.guilds.find((g) => g.id === guildId);
+  const dm = isDm(selected) ? selected : undefined;
+  const home = guildId === HOME || !!dm || (!selected && servers.length === 0);
+  const guild = home ? dm : selected ?? servers[0];
+  const dmUser = dm && state.user ? dmOther(dm, state.user.id) : undefined;
   // Canal de voz apagado ou saí do servidor: sai da call.
   useEffect(() => {
     if (voice.channelId && state.ready && !state.guilds.some((g) => g.channels.some((c) => c.id === voice.channelId))) void voice.leave();
@@ -215,22 +222,71 @@ function Main({ onLogout }: { onLogout: () => void }) {
     if (code) setGuildId((await api<Guild>('POST', `/invites/${code}`).catch((e) => (alert(e.message), null)))?.id ?? guildId);
   };
 
-  const voiceChannel = guild?.channels.find((c) => c.id === voice.channelId);
   const leaveGuild = async (g: Guild) => {
     if (!confirm(`Sair do servidor ${g.name}? Você só volta com um convite novo.`)) return;
     await api('DELETE', `/guilds/${g.id}/members/@me`).catch((e) => alert(e.message));
   };
   const voiceGuild = state.guilds.find((g) => g.channels.some((c) => c.id === voice.channelId));
+  const voiceChannel = voiceGuild?.channels.find((c) => c.id === voice.channelId);
+  const voiceName = voiceGuild && isDm(voiceGuild) ? `Chamada com ${dmOther(voiceGuild, state.user.id).display_name}` : voiceChannel?.name ?? 'Voz';
+
+  // Amigos e conversas diretas
+  const showDm = (id: string) => {
+    setGuildId(id);
+    setChannelId(null);
+    setView('text');
+  };
+  const messageUser = async (userId: string) => {
+    const g = await openDm(userId);
+    if (g) showDm(g.id);
+  };
+  const callUser = async (userId: string) => {
+    const g = await openDm(userId);
+    const vc = g && dmVoice(g);
+    if (!g || !vc) return;
+    setGuildId(g.id);
+    openChannel(vc);
+  };
+  const profileActions = (u: User) => {
+    const rel = state.relationships[u.id];
+    if (rel?.type === 'friend')
+      return <button className="profile-edit primary" onClick={() => (setProfile(null), void messageUser(u.id))}><MessageCircle size={14} /> Mandar mensagem</button>;
+    if (rel?.type === 'incoming')
+      return <button className="profile-edit primary" onClick={() => api('PUT', `/relationships/${u.id}`).catch((e) => toast(e.message, 'error'))}><Check size={14} /> Aceitar pedido de amizade</button>;
+    if (rel?.type === 'outgoing') return <button className="profile-edit" disabled>Pedido de amizade enviado</button>;
+    return (
+      <button className="profile-edit primary" onClick={() => addFriend({ user_id: u.id }).then(() => toast(`Pedido enviado para ${u.display_name}`)).catch((e) => toast(e.message, 'error'))}>
+        <UserPlus size={14} /> Adicionar amigo
+      </button>
+    );
+  };
+  const badge = homeBadge(state);
+  const unreadDms = dmGuilds(state).filter((g) => g.id !== dm?.id && dmText(g) && mentionCount(dmText(g)!.id) > 0);
 
   return (
     <div className="app">
       <nav className="guilds">
-        {state.guilds.map((g) => {
+        <button className={`guild home ${home ? 'active' : ''}`} title="Amigos e mensagens diretas" onClick={() => setGuildId(HOME)}>
+          <Radio size={22} />
+          {badge > 0 && <span className="count-badge">{badge > 99 ? '99+' : badge}</span>}
+        </button>
+        {unreadDms.map((g) => {
+          const other = dmOther(g, state.user!.id);
+          const n = mentionCount(dmText(g)!.id);
+          return (
+            <button key={g.id} className="guild has-icon dm-bubble" title={other.display_name} onClick={() => showDm(g.id)}>
+              <Avatar user={other} size={48} />
+              <span className="count-badge">{n > 99 ? '99+' : n}</span>
+            </button>
+          );
+        })}
+        {servers.length > 0 && <div className="guild-sep" />}
+        {servers.map((g) => {
           const text = g.channels.filter((c) => c.type === 'text');
-          const unread = g.id !== guild?.id && text.some((c) => isUnread(c.id, c.last_message_id));
+          const unread = (home || g.id !== guild?.id) && text.some((c) => isUnread(c.id, c.last_message_id));
           const mentions = text.reduce((n, c) => n + mentionCount(c.id), 0);
           return (
-            <button key={g.id} className={`guild ${g.id === guild?.id ? 'active' : ''} ${g.icon ? 'has-icon' : ''} ${unread ? 'unread' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
+            <button key={g.id} className={`guild ${!home && g.id === guild?.id ? 'active' : ''} ${g.icon ? 'has-icon' : ''} ${unread ? 'unread' : ''}`} title={g.name} onClick={() => setGuildId(g.id)}>
               <GuildIcon name={g.name} icon={g.icon} />
               {mentions > 0 && <span className="count-badge">{mentions > 99 ? '99+' : mentions}</span>}
             </button>
@@ -242,7 +298,16 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </nav>
 
       <aside className="sidebar">
-        {guild ? (
+        {home ? (
+          <HomeSidebar
+            state={state}
+            me={state.user}
+            activeDm={dm?.id ?? null}
+            onFriends={() => (setGuildId(HOME), setView('text'))}
+            onOpenDm={showDm}
+            presenceOf={presenceOf}
+          />
+        ) : guild ? (
           <ChannelList
             onLeave={() => leaveGuild(guild)}
             guild={guild}
@@ -277,7 +342,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             onOpenQueue={() => (setView('voice'), setMusicOpen(true))}
           />
         )}
-        {voice.channelId && <VoiceBar voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onOpen={() => setView('voice')} />}
+        {voice.channelId && <VoiceBar voice={voice} channelName={voiceName} onOpen={() => (voiceGuild && setGuildId(voiceGuild.id), setView('voice'))} />}
         <div className="userbar">
           <button className="userbar-me" title="Mudar status" onClick={() => setStatusMenu((v) => !v)}>
             <Avatar user={state.user} status={myPresence(state.status) === 'offline' ? 'offline' : myPresence(state.status)} />
@@ -306,30 +371,50 @@ function Main({ onLogout }: { onLogout: () => void }) {
         {view === 'voice' && voice.channelId ? (
           <VoiceView
             voice={voice}
-            channelName={voiceChannel?.name ?? 'Voz'}
+            channelName={voiceName}
             voiceFlags={state.voiceFlags}
             guild={voiceGuild}
-            isOwner={!!voiceGuild && voiceGuild.owner_id === state.user.id}
+            isOwner={ownsGuild(voiceGuild, state.user.id)}
             onSettings={() => setSettingsOpen('voice')}
             music={state.music[voice.channelId]}
             gateway={gateway}
             musicOpen={musicOpen}
             setMusicOpen={setMusicOpen}
           />
-        ) : textChannel ? (
-          <Chat key={textChannel.id} channel={textChannel} guild={guild} state={state} dispatch={dispatch} gateway={gateway} onOpenChannel={(id) => (setChannelId(id), setView('text'))} />
+        ) : home && !dm ? (
+          <FriendsView state={state} presenceOf={presenceOf} onMessage={messageUser} onCall={callUser} />
+        ) : guild && textChannel ? (
+          <Chat
+            key={textChannel.id}
+            channel={textChannel}
+            guild={guild}
+            state={state}
+            dispatch={dispatch}
+            gateway={gateway}
+            onOpenChannel={(id) => (setChannelId(id), setView('text'))}
+            dm={dmUser}
+            onCall={dm && dmUser ? () => openChannel(dmVoice(dm)!) : undefined}
+          />
         ) : (
           <div className="empty">Nenhum canal de texto.</div>
         )}
       </main>
 
-      {guild && view === 'text' && <MemberList guild={guild} presenceOf={presenceOf} />}
+      {view === 'text' && dm && dmUser && (
+        <DmProfilePanel
+          user={dmUser}
+          status={presenceOf(dmUser.id)}
+          relationship={state.relationships[dmUser.id]}
+          onAdd={() => addFriend({ user_id: dmUser.id }).catch((e) => toast(e.message, 'error'))}
+        />
+      )}
+      {guild && !dm && view === 'text' && <MemberList guild={guild} presenceOf={presenceOf} />}
       {sideMenu && guild && (
         <CallMenu
           menu={sideMenu}
           voice={voice}
           guild={guild}
-          isOwner={guild.owner_id === state.user.id}
+          isOwner={ownsGuild(guild, state.user.id)}
           flags={state.voiceFlags[sideMenu.user.identity]}
           onClose={() => setSideMenu(null)}
           onFullscreen={() => {}}
@@ -349,12 +434,13 @@ function Main({ onLogout }: { onLogout: () => void }) {
       )}
       {profile && (
         <ProfileCard
-          user={state.guilds.flatMap((g) => g.members).find((m) => m.id === profile.user.id) ?? (profile.user.id === state.user.id ? state.user : profile.user)}
+          user={state.guilds.flatMap((g) => g.members).find((m) => m.id === profile.user.id) ?? state.relationships[profile.user.id]?.user ?? (profile.user.id === state.user.id ? state.user : profile.user)}
           status={presenceOf(profile.user.id)}
           x={profile.x}
           y={profile.y}
           isMe={profile.user.id === state.user.id}
           onEdit={() => (setProfile(null), setSettingsOpen('profile'))}
+          actions={profileActions(profile.user)}
           onClose={() => setProfile(null)}
         />
       )}
@@ -1129,6 +1215,8 @@ function VideoTrack({ track, contain, mirror }: { track: Track; contain?: boolea
 }
 
 const REJOIN_KEY = 'nexo.rejoinVoice';
+/** guildId especial da tela inicial (Amigos e mensagens diretas). */
+const HOME = '@home';
 
 /**
  * Quando sai versão nova, recarrega o app sozinho. Fora da call: em 5 segundos (espera se você

@@ -58,7 +58,7 @@ export async function pickImage(size = 128): Promise<string | null> {
 }
 
 /** Cartão de perfil (clique no nome ou na foto de alguém), como no Discord. */
-export function ProfileCard({ user, status, x, y, onClose, isMe, onEdit }: {
+export function ProfileCard({ user, status, x, y, onClose, isMe, onEdit, actions }: {
   user: User;
   status: Presence;
   x: number;
@@ -66,6 +66,7 @@ export function ProfileCard({ user, status, x, y, onClose, isMe, onEdit }: {
   onClose: () => void;
   isMe?: boolean;
   onEdit?: () => void;
+  actions?: React.ReactNode; // botões extras (adicionar amigo, mandar mensagem)
 }) {
   const s = useSettings();
   const ref = useRef<HTMLDivElement>(null);
@@ -92,6 +93,7 @@ export function ProfileCard({ user, status, x, y, onClose, isMe, onEdit }: {
       {isMe && onEdit && (
         <button className="profile-edit" onClick={onEdit}><Pencil size={14} /> Editar perfil</button>
       )}
+      {!isMe && actions}
     </div>
   );
 }

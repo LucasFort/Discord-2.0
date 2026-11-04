@@ -1,9 +1,9 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { playSound } from './sounds';
 import { checkForUpdate } from './update';
-import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Presence, type User, type UserStatus } from './api';
+import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Presence, type Relationship, type User, type UserStatus } from './api';
 import { startIdleWatch } from './activity';
-import { notifyMessage, setMe } from './notify';
+import { addDirectChannels, notifyMessage, setDirectChannels, setMe } from './notify';
 import { noteMessage } from './unread';
 import { toast } from './toast';
 
@@ -13,6 +13,7 @@ export type State = {
   user: User | null;
   status: UserStatus; // o que eu escolhi
   guilds: Guild[];
+  relationships: Record<string, Relationship>; // id da outra pessoa -> amizade ou pedido
   presence: Record<string, Presence>; // só quem não está offline
   voice: Record<string, string>; // userId -> voice channelId
   voiceFlags: Record<string, VoiceFlags>; // userId -> mutado, ensurdecido, transmitindo, câmera
@@ -48,7 +49,7 @@ function withMusic(music: State['music'], list: MusicState[]) {
 export type VoiceServerAction = { n: number; action: 'mute' | 'deafen' | 'disconnect' | 'move'; by: string; channel_id?: string };
 
 type Action =
-  | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; presences: PresenceItem[]; voice_states: VoiceState[]; music?: MusicState[] } }
+  | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; relationships?: Relationship[]; presences: PresenceItem[]; voice_states: VoiceState[]; music?: MusicState[] } }
   | { t: 'GUILD_CREATE'; d: Guild & { presences?: PresenceItem[] } }
   | { t: 'GUILD_UPDATE'; d: Omit<Guild, 'channels' | 'members'> }
   | { t: 'GUILD_DELETE'; d: { id: string } }
@@ -66,7 +67,9 @@ type Action =
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
   | { t: 'TYPING_SWEEP' }
   | { t: 'VOICE_SERVER_ACTION'; d: Omit<VoiceServerAction, 'n'> }
-  | { t: 'MUSIC_STATE'; d: MusicState };
+  | { t: 'MUSIC_STATE'; d: MusicState }
+  | { t: 'RELATIONSHIP_ADD'; d: Relationship & { status?: Presence; notice?: 'request' | 'accepted' } }
+  | { t: 'RELATIONSHIP_REMOVE'; d: { id: string } };
 
 type PresenceItem = { user_id: string; status: Presence };
 const presenceMap = (items: PresenceItem[] = []) =>
@@ -84,7 +87,7 @@ export type VoiceFlags = {
 };
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null } & VoiceFlags;
 
-const initial: State = { ready: false, connection: 0, user: null, status: 'online', guilds: [], presence: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null, music: {} };
+const initial: State = { ready: false, connection: 0, user: null, status: 'online', guilds: [], relationships: {}, presence: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null, music: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -116,6 +119,7 @@ function reducer(s: State, a: Action): State {
         user: a.d.user,
         status: a.d.status ?? 'online',
         guilds: a.d.guilds,
+        relationships: Object.fromEntries((a.d.relationships ?? []).map((r) => [r.user.id, r])),
         presence: presenceMap(a.d.presences),
         voice,
         voiceFlags,
@@ -147,6 +151,7 @@ function reducer(s: State, a: Action): State {
         ...s,
         user: s.user?.id === u.id ? { ...s.user, ...u } : s.user,
         guilds: s.guilds.map((g) => (g.members.some((m) => m.id === u.id) ? { ...g, members: g.members.map(fix) } : g)),
+        relationships: s.relationships[u.id] ? { ...s.relationships, [u.id]: { ...s.relationships[u.id], user: fix(s.relationships[u.id].user) } } : s.relationships,
         messages,
       };
     }
@@ -228,6 +233,16 @@ function reducer(s: State, a: Action): State {
         typing: { ...s.typing, [a.d.channel_id]: { ...s.typing[a.d.channel_id], [a.d.user_id]: Date.now() + 8000 } },
       };
     }
+    case 'RELATIONSHIP_ADD': {
+      const { status, notice: _notice, ...rel } = a.d;
+      const presence = { ...s.presence };
+      if (status && status !== 'offline') presence[rel.user.id] = status;
+      return { ...s, relationships: { ...s.relationships, [rel.user.id]: rel }, presence };
+    }
+    case 'RELATIONSHIP_REMOVE': {
+      const { [a.d.id]: _gone, ...relationships } = s.relationships;
+      return { ...s, relationships };
+    }
     case 'MUSIC_STATE':
       return { ...s, music: withMusic(s.music, [a.d]) };
     case 'VOICE_SERVER_ACTION':
@@ -287,7 +302,16 @@ export function useStore(onUnauthorized: () => void) {
           if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
           if (msg.t === 'MUSIC_ERROR') return toast(msg.d?.message ?? 'Não deu para tocar essa música.', 'error');
           if (msg.t === 'MUSIC_ADDED') return toast(msg.d.position > 0 ? `Na fila (${msg.d.position}º): ${msg.d.title}` : `Tocando: ${msg.d.title}`);
+          const dmText = (gs: Guild[]) => gs.filter((g) => Number(g.is_dm)).flatMap((g) => g.channels.filter((c) => c.type === 'text').map((c) => c.id));
+          if (msg.t === 'READY') setDirectChannels(dmText(msg.d.guilds));
+          if (msg.t === 'GUILD_CREATE') addDirectChannels(dmText([msg.d]));
           if (msg.t === 'MESSAGE_CREATE') noteMessage(msg.d, meUser.current);
+          // Pedido de amizade chegou ou foi aceito: aviso na tela e som (exceto em "Não perturbe").
+          if (msg.t === 'RELATIONSHIP_ADD' && msg.d.notice && statusRef.current !== 'dnd') {
+            const name = msg.d.user.display_name;
+            toast(msg.d.notice === 'request' ? `${name} quer ser seu amigo` : `${name} aceitou seu pedido de amizade`, 'join');
+            playSound('message');
+          }
           // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
           // "Não perturbe" silencia os dois, como no Discord.
           if (msg.t === 'MESSAGE_CREATE' && msg.d.author?.id !== meRef.current && statusRef.current !== 'dnd') {

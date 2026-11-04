@@ -4,6 +4,12 @@ import { getSettings } from './settings';
 let me: User | null = null;
 export const setMe = (u: User) => void (me = u);
 
+/** Canais de texto das conversas diretas: toda mensagem neles conta como menção (como no Discord). */
+let directChannels = new Set<string>();
+export const setDirectChannels = (ids: Iterable<string>) => void (directChannels = new Set(ids));
+export const addDirectChannels = (ids: Iterable<string>) => void (directChannels = new Set([...directChannels, ...ids]));
+export const isDirect = (channelId: string) => directChannels.has(channelId);
+
 /** Pede permissão para avisos na área de trabalho (precisa vir de um clique). */
 export async function requestNotifyPermission() {
   if (typeof Notification === 'undefined') return 'unsupported' as const;
@@ -23,7 +29,7 @@ export function notifyMessage(msg: Message) {
   const s = getSettings();
   if (s.desktopNotify === 'off' || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   if (document.hasFocus() && !document.hidden) return;
-  if (s.desktopNotify === 'mentions' && !mentionsMe(msg.content)) return;
+  if (s.desktopNotify === 'mentions' && !isDirect(msg.channel_id) && !mentionsMe(msg.content)) return;
   const body = s.streamerMode ? 'Nova mensagem' : msg.content.slice(0, 180);
   try {
     const n = new Notification(s.streamerMode ? 'Nexo' : msg.author.display_name, { body, tag: msg.channel_id, silent: true });
