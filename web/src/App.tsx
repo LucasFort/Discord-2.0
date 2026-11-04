@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { can, canAny, MANAGE_ANY, nameColor, outranks, P } from './permissions';
 import { addFriend, DmProfilePanel, dmGuilds, dmText, dmVoice, FriendsView, HomeSidebar, homeBadge, openDm } from './friends';
-import { MusicMiniPlayer, MusicPanel } from './music';
+import { DjTile, MusicMiniPlayer, MusicPanel, OPEN_MUSIC_EVENT } from './music';
 import { api, API_MISSING, APP_NAME, dmOther, getToken, isDm, ownsGuild, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
@@ -120,6 +120,16 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
   const [musicOpen, setMusicOpen] = useState(false);
+  // /queue no chat abre a fila da call.
+  useEffect(() => {
+    const open = () => {
+      if (!voice.channelId) return toast('Entre num canal de voz para ver a fila de músicas.', 'error');
+      setView('voice');
+      setMusicOpen(true);
+    };
+    window.addEventListener(OPEN_MUSIC_EVENT, open);
+    return () => window.removeEventListener(OPEN_MUSIC_EVENT, open);
+  }, [voice.channelId]);
   const [sideMenu, setSideMenu] = useState<CallMenuState | null>(null);
 
   // Silenciado/ensurdecido no servidor: o microfone e o som seguem o que o servidor manda.
@@ -550,8 +560,12 @@ function ChannelList(props: {
               {type === 'text' && mentionCount(c.id) > 0 && <span className="count-badge">{mentionCount(c.id)}</span>}
             </button>
             {type === 'voice' && state.music[c.id] && (
-              <div className="voice-music" title={state.music[c.id].queue[0].title}>
-                <Music size={12} /> <span>{state.music[c.id].queue[0].title}</span>
+              // O Nexo DJ aparece na call como um membro (bot), com a música que está tocando.
+              <div className="voice-member voice-dj" title={`${state.music[c.id].playing ? 'Tocando' : 'Pausada'}: ${state.music[c.id].queue[0].title}`}>
+                <span className="dj-avatar small"><Music size={11} /></span>
+                <span className="voice-member-name">Nexo DJ</span>
+                <span className="bot-tag">BOT</span>
+                <span className="voice-dj-song">{state.music[c.id].playing ? '♪' : '❚❚'} {state.music[c.id].queue[0].title}</span>
               </div>
             )}
             {type === 'voice' &&
@@ -766,10 +780,16 @@ function VoiceView({ voice, channelName, voiceFlags, guild, mod, canStream, onSe
               </div>
             </div>
           )}
-          <div className="strip">{tiles.filter((t) => t !== focused).map((t) => renderTile(t, 'strip'))}</div>
+          <div className="strip">
+            {tiles.filter((t) => t !== focused).map((t) => renderTile(t, 'strip'))}
+            {music && <DjTile music={music} compact onOpen={() => setMusicOpen(true)} />}
+          </div>
         </div>
       ) : (
-        <div className="grid">{tiles.map((t) => renderTile(t, 'grid'))}</div>
+        <div className="grid">
+          {tiles.map((t) => renderTile(t, 'grid'))}
+          {music && <DjTile music={music} onOpen={() => setMusicOpen(true)} />}
+        </div>
       )}
       <div className="floating-layer" aria-hidden>
         {voice.floating.map((f) => (

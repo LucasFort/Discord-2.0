@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ListMusic, Music, Pause, Play, Plus, Search, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, ListMusic, Music, Pause, Play, Plus, Repeat, Repeat1, Search, Shuffle, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-react';
 import { api, type Guild } from './api';
 import { musicPosition, type Gateway, type MusicState } from './store';
 import { toast } from './toast';
@@ -215,6 +215,7 @@ export function MusicMiniPlayer({ music, gateway, deafened, onOpenQueue }: {
           {music.playing ? <Pause size={16} /> : <Play size={16} />}
         </button>
         <button className="icon small" title="Pular música" onClick={() => send('skip', { track_id: t.id })}><SkipForward size={16} /></button>
+        <LoopButton music={music} send={send} />
         <button className="icon small" title={volume === 0 ? 'Ativar som da música' : 'Silenciar música (só para mim)'} onClick={() => setVolume((v) => (v === 0 ? 40 : 0))}>
           {volume === 0 || deafened ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
@@ -226,6 +227,17 @@ export function MusicMiniPlayer({ music, gateway, deafened, onOpenQueue }: {
 }
 
 type SearchResult = { video_id: string; title: string; author: string; thumbnail: string };
+
+const LOOP_TITLE = { off: 'Repetir: desligado (clique para repetir a fila)', all: 'Repetindo a fila (clique para repetir só esta música)', one: 'Repetindo esta música (clique para desligar)' };
+/** Botão de repetir: desligado → fila → esta música → desligado. */
+export function LoopButton({ music, send }: { music: MusicState; send: (action: string, extra?: object) => void }) {
+  const mode = music.loop ?? 'off';
+  return (
+    <button className={`icon small ${mode !== 'off' ? 'active' : ''}`} title={LOOP_TITLE[mode]} aria-label={LOOP_TITLE[mode]} onClick={() => send('loop')}>
+      {mode === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
+    </button>
+  );
+}
 
 /** Painel "Música" na tela da call: colar link, ver e mexer na fila. */
 export function MusicPanel({ music, gateway, guild, onClose }: {
@@ -310,7 +322,7 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
           </>
         ) : !now ? (
           <p className="music-empty">
-            Nada tocando. Digite o nome de uma música (ou cole um link do YouTube) e todo mundo da call ouve junto, no mesmo ponto.
+            Nada tocando. Digite o nome de uma música, cole um link do YouTube (vídeo ou playlist) ou use /play no chat. Todo mundo da call ouve junto, no mesmo ponto.
           </p>
         ) : (
           <>
@@ -325,10 +337,14 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
                 {music!.playing ? <Pause size={16} /> : <Play size={16} />}
               </button>
               <button className="icon small" title="Pular" onClick={() => send('skip', { track_id: now.id })}><SkipForward size={16} /></button>
+              <LoopButton music={music!} send={send} />
             </div>
             <div className="music-section">
               A seguir · {next.length}
-              {next.length > 0 && <button className="link" onClick={() => send('clear')}>Limpar fila</button>}
+              <span className="music-section-actions">
+                {next.length > 1 && <button className="icon small" title="Embaralhar a fila" onClick={() => send('shuffle')}><Shuffle size={14} /></button>}
+                {next.length > 0 && <button className="link" onClick={() => send('clear')}>Limpar fila</button>}
+              </span>
             </div>
             {next.length === 0 && <p className="music-empty">A fila está vazia. Adicione mais músicas acima.</p>}
             {next.map((t, i) => (
@@ -357,6 +373,10 @@ export const MUSIC_COMMANDS = [
   { name: 'resume', args: '', desc: 'Volta a tocar a música pausada' },
   { name: 'skip', args: '', desc: 'Pula para a próxima música da fila' },
   { name: 'stop', args: '', desc: 'Para a música e limpa a fila' },
+  { name: 'queue', args: '', desc: 'Abre a fila de músicas da call' },
+  { name: 'np', args: '', desc: 'Mostra a música que está tocando' },
+  { name: 'loop', args: '[fila | musica | off]', desc: 'Repete a fila ou só a música atual' },
+  { name: 'shuffle', args: '', desc: 'Embaralha as próximas músicas' },
 ] as const;
 const ALIASES: Record<string, (typeof MUSIC_COMMANDS)[number]['name']> = {
   play: 'play', p: 'play', tocar: 'play',
@@ -364,7 +384,15 @@ const ALIASES: Record<string, (typeof MUSIC_COMMANDS)[number]['name']> = {
   resume: 'resume', continuar: 'resume',
   skip: 'skip', s: 'skip', pular: 'skip', next: 'skip',
   stop: 'stop', parar: 'stop',
+  queue: 'queue', q: 'queue', fila: 'queue',
+  np: 'np', tocando: 'np', nowplaying: 'np',
+  loop: 'loop', repeat: 'loop', repetir: 'loop',
+  shuffle: 'shuffle', embaralhar: 'shuffle', aleatorio: 'shuffle',
 };
+const LOOP_ARGS: Record<string, string> = { off: 'off', desligar: 'off', nao: 'off', fila: 'all', all: 'all', queue: 'all', tudo: 'all', musica: 'one', one: 'one', song: 'one', esta: 'one' };
+
+/** /queue abre o painel da fila (o App escuta este evento). */
+export const OPEN_MUSIC_EVENT = 'nexo:open-music';
 
 /**
  * Trata "/play despacito" e afins digitados no chat. Devolve true se era um comando de música
@@ -383,8 +411,42 @@ export function runMusicCommand(raw: string, gateway: Gateway, inVoice: boolean)
     if (!arg) toast('Use /play seguido do nome da música ou de um link do YouTube.', 'error');
     else {
       gateway.send({ op: 'music', action: 'add', url: arg });
-      toast(`Procurando "${arg.length > 60 ? `${arg.slice(0, 60)}…` : arg}"…`);
+      if (!/youtu\.?be|youtube\.com|^https?:\/\//i.test(arg)) toast(`Procurando "${arg.length > 60 ? `${arg.slice(0, 60)}…` : arg}"…`);
     }
+  } else if (cmd === 'queue') window.dispatchEvent(new Event(OPEN_MUSIC_EVENT));
+  else if (cmd === 'np') gateway.send({ op: 'music', action: 'nowplaying' });
+  else if (cmd === 'loop') {
+    const mode = LOOP_ARGS[arg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/\s+/)[0]];
+    if (arg && !mode) toast('Use /loop fila, /loop musica ou /loop off.', 'error');
+    else gateway.send({ op: 'music', action: 'loop', ...(mode ? { mode } : {}) });
   } else gateway.send({ op: 'music', action: cmd });
   return true;
+}
+
+/**
+ * O Nexo DJ como um "participante" na grade da call: capa da música, título e quem pediu.
+ * Clique abre a fila. Não é um player: o som vem do mini player da barra lateral.
+ */
+export function DjTile({ music, compact, onOpen }: { music: MusicState; compact?: boolean; onOpen: () => void }) {
+  const t = music.queue[0];
+  if (!t) return null;
+  return (
+    <div className={`tile dj-tile ${music.playing ? 'playing' : ''} ${compact ? 'compact' : ''}`} onClick={onOpen} title="Nexo DJ · clique para ver a fila">
+      <div className="dj-tile-bg" style={{ backgroundImage: `url(https://i.ytimg.com/vi/${t.video_id}/hqdefault.jpg)` }} />
+      <div className="dj-tile-center">
+        <span className="dj-avatar"><Music size={compact ? 18 : 30} /></span>
+        {!compact && (
+          <div className="dj-tile-song">
+            <strong>{t.title}</strong>
+            <small>{music.playing ? 'Tocando' : 'Pausada'}{music.queue.length > 1 ? ` · ${music.queue.length - 1} na fila` : ''}{music.loop && music.loop !== 'off' ? ' · repetindo' : ''}</small>
+          </div>
+        )}
+      </div>
+      <div className="tile-name">
+        {music.playing && <span className="dj-bars" aria-hidden><i /><i /><i /></span>}
+        <span className="tile-label">Nexo DJ</span>
+        <span className="bot-tag">BOT</span>
+      </div>
+    </div>
+  );
 }

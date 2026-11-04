@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { channelHasPeople, sendToGuild, sendToUser, voiceStateOf } from './gateway.js';
-import type { User } from './db.js';
+import { channelHasPeople, sendToChannel, sendToUser, usersInVoice, voiceStateOf } from './gateway.js';
+import { getUser, type User } from './db.js';
 
 /**
- * "Ouvir junto": fila de músicas por canal de voz.
+ * "Ouvir junto" (o Nexo DJ): fila de músicas por canal de voz.
  * O servidor guarda só a fila e o relógio (qual música, onde parou, se está tocando). O áudio em si
  * toca no player oficial do YouTube de cada pessoa da call, sincronizado por esse relógio.
  * Nada é baixado nem retransmitido, então segue os termos do YouTube e não pesa no servidor.
  */
 export type MusicTrack = { id: string; video_id: string; title: string; author: string; added_by: string };
+export type LoopMode = 'off' | 'one' | 'all';
 type MusicState = {
   guildId: string;
   channelId: string;
@@ -16,9 +17,11 @@ type MusicState = {
   playing: boolean;
   position: number; // segundos na música atual no instante updatedAt
   updatedAt: number; // Date.now() do servidor
+  loop: LoopMode; // repetir: desligado, a música atual ou a fila toda
 };
 
 const MAX_QUEUE = 50;
+const PLAYLIST_MAX = 25; // músicas que uma playlist põe na fila de uma vez
 const states = new Map<string, MusicState>(); // channelId -> estado
 
 const positionNow = (s: MusicState) => s.position + (s.playing ? (Date.now() - s.updatedAt) / 1000 : 0);
@@ -30,33 +33,39 @@ const payload = (s: MusicState | { guildId: string; channelId: string; queue?: u
   playing: s.queue ? s.playing : false,
   position: s.queue ? s.position : 0,
   updated_at: s.queue ? s.updatedAt : Date.now(),
+  loop: s.queue ? s.loop : 'off',
   server_now: Date.now(),
 });
 
-const broadcast = (s: MusicState) => sendToGuild(s.guildId, 'MUSIC_STATE', payload(s));
+/** Só quem vê o canal de voz fica sabendo o que toca nele (canal privado não vaza o nome da música). */
+const broadcast = (s: { guildId: string; channelId: string; queue?: MusicTrack[] }) =>
+  sendToChannel({ id: s.channelId, guild_id: s.guildId }, 'MUSIC_STATE', payload(s as MusicState));
 
-/** Estados de música dos servidores da pessoa (vai junto no READY). */
-export const musicStatesFor = (guildIds: Set<string>) =>
-  [...states.values()].filter((s) => guildIds.has(s.guildId) && s.queue.length).map(payload);
+/** Aviso do Nexo DJ para quem está na call ("Ana pulou a música"). Quem fez a ação não recebe. */
+function notice(channelId: string, text: string, exceptId?: string) {
+  for (const id of usersInVoice(channelId)) if (id !== exceptId) sendToUser(id, 'MUSIC_NOTICE', { channel_id: channelId, text });
+}
+const nameOf = async (id: string) => (await getUser(id))?.display_name ?? 'Alguém';
+const short = (t: string) => (t.length > 60 ? `${t.slice(0, 60)}…` : t);
 
-/** Todo mundo saiu do canal de voz: a fila acaba, como num bot que sai da call vazia. */
+/** Estados de música dos canais de voz que a pessoa vê (vai junto no READY). */
+export const musicStatesFor = (channelIds: Set<string>) =>
+  [...states.values()].filter((s) => channelIds.has(s.channelId) && s.queue.length).map(payload);
+
+/** Todo mundo saiu do canal de voz: a fila acaba, como um bot que sai da call vazia. */
 export async function onVoiceChannelLeft(channelId: string) {
   const s = states.get(channelId);
   if (!s || channelHasPeople(channelId)) return;
   states.delete(channelId);
-  await sendToGuild(s.guildId, 'MUSIC_STATE', payload({ guildId: s.guildId, channelId }));
+  await broadcast({ guildId: s.guildId, channelId });
 }
 
 /** Pega o ID do vídeo de qualquer link do YouTube (watch, youtu.be, shorts, music, embed, live). */
 export function youtubeId(input: string): string | null {
   const text = input.trim();
   if (/^[\w-]{11}$/.test(text)) return text;
-  let url: URL;
-  try {
-    url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
-  } catch {
-    return null;
-  }
+  const url = parseUrl(text);
+  if (!url) return null;
   const host = url.hostname.replace(/^(www|m|music)\./, '');
   let id: string | null = null;
   if (host === 'youtu.be') id = url.pathname.slice(1, 12);
@@ -66,6 +75,23 @@ export function youtubeId(input: string): string | null {
     if (!id && m) id = m[1];
   }
   return id && /^[\w-]{11}$/.test(id) ? id : null;
+}
+
+/** ID da playlist num link do YouTube (?list=...). Ignora os "mixes" automáticos (RD...), que a API não lista. */
+export function playlistId(input: string): string | null {
+  const url = parseUrl(input.trim());
+  if (!url || !/(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(url.hostname)) return null;
+  const id = url.searchParams.get('list');
+  return id && /^[\w-]{10,64}$/.test(id) && !id.startsWith('RD') ? id : null;
+}
+
+function parseUrl(text: string) {
+  if (!/[./]/.test(text) || /\s/.test(text)) return null;
+  try {
+    return new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+  } catch {
+    return null;
+  }
 }
 
 /** Título e canal pelo oEmbed público do YouTube. Responde null se o vídeo não pode tocar fora do YouTube. */
@@ -85,55 +111,97 @@ async function videoInfo(id: string): Promise<{ title: string; author: string } 
   }
 }
 
-type MusicOp = { action?: string; url?: string; track_id?: string; position?: number };
+type MusicOp = { action?: string; url?: string; track_id?: string; position?: number; mode?: string };
+type NewTrack = Omit<MusicTrack, 'id' | 'added_by'>;
 
-/** Comandos do painel de música. Só quem está no canal de voz mexe na fila dele. */
+/** Comandos do painel e do chat. Só quem está no canal de voz mexe na fila dele. */
 export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
   const v = voiceStateOf(user.id);
   if (!v) return sendToUser(user.id, 'MUSIC_ERROR', { message: 'Entre num canal de voz para tocar música.' });
+  const fail = (message: string) => sendToUser(user.id, 'MUSIC_ERROR', { message });
   let s = states.get(v.channelId);
 
   if (msg.action === 'add') {
-    const input = String(msg.url ?? '').trim().slice(0, 200);
-    let id = youtubeId(input);
-    // Não é link (ex.: "/play despacito" no chat): toca o primeiro resultado da busca.
-    if (!id && input && musicSearchEnabled()) {
+    const input = String(msg.url ?? '').trim().slice(0, 300);
+    const room = MAX_QUEUE - (s?.queue.length ?? 0);
+    if (room <= 0) return fail(`A fila já tem ${MAX_QUEUE} músicas.`);
+    let tracks: NewTrack[] = [];
+    let fromPlaylist = false;
+    const listId = playlistId(input);
+    if (listId && musicSearchEnabled()) {
+      // Link de playlist: põe as primeiras músicas dela na fila.
       try {
-        id = (await searchYouTube(input))[0]?.video_id ?? null;
+        tracks = (await playlistItems(listId)).slice(0, Math.min(room, PLAYLIST_MAX));
+        fromPlaylist = tracks.length > 0;
       } catch (e) {
-        return sendToUser(user.id, 'MUSIC_ERROR', { message: (e as Error).message });
+        if (!youtubeId(input)) return fail((e as Error).message);
       }
-      if (!id) return sendToUser(user.id, 'MUSIC_ERROR', { message: `Nada encontrado para "${input}".` });
     }
-    if (!id)
-      return sendToUser(user.id, 'MUSIC_ERROR', {
-        message: musicSearchEnabled() || !input ? 'Cole um link de vídeo do YouTube.' : 'A busca pelo nome ainda não foi ligada no servidor (falta a YOUTUBE_API_KEY). Use um link do YouTube.',
-      });
-    if (s && s.queue.length >= MAX_QUEUE) return sendToUser(user.id, 'MUSIC_ERROR', { message: `A fila já tem ${MAX_QUEUE} músicas.` });
-    const info = await videoInfo(id);
-    if (!info) return sendToUser(user.id, 'MUSIC_ERROR', { message: 'Esse vídeo não existe, é privado ou o dono não deixa tocar fora do YouTube.' });
-    // A pessoa pode ter saído da call enquanto buscávamos o título.
+    if (!tracks.length) {
+      let id = youtubeId(input);
+      // Não é link (ex.: "/play despacito" no chat): toca o primeiro resultado da busca.
+      if (!id && input && !listId && musicSearchEnabled()) {
+        try {
+          id = (await searchYouTube(input))[0]?.video_id ?? null;
+        } catch (e) {
+          return fail((e as Error).message);
+        }
+        if (!id) return fail(`Nada encontrado para "${input}".`);
+      }
+      if (!id)
+        return fail(
+          listId && !musicSearchEnabled()
+            ? 'Playlists precisam da busca ligada no servidor (YOUTUBE_API_KEY). Cole o link de um vídeo.'
+            : musicSearchEnabled() || !input
+              ? 'Cole um link de vídeo do YouTube.'
+              : 'A busca pelo nome ainda não foi ligada no servidor (falta a YOUTUBE_API_KEY). Use um link do YouTube.',
+        );
+      const info = await videoInfo(id);
+      if (!info) return fail('Esse vídeo não existe, é privado ou o dono não deixa tocar fora do YouTube.');
+      tracks = [{ video_id: id, ...info }];
+    }
+    // A pessoa pode ter saído da call enquanto buscávamos.
     const now = voiceStateOf(user.id);
     if (!now || now.channelId !== v.channelId) return;
     s = states.get(v.channelId);
     if (!s) {
-      s = { guildId: v.guildId, channelId: v.channelId, queue: [], playing: true, position: 0, updatedAt: Date.now() };
+      s = { guildId: v.guildId, channelId: v.channelId, queue: [], playing: true, position: 0, updatedAt: Date.now(), loop: 'off' };
       states.set(v.channelId, s);
     }
-    s.queue.push({ id: randomUUID(), video_id: id, title: info.title, author: info.author, added_by: user.id });
-    if (s.queue.length === 1) Object.assign(s, { playing: true, position: 0, updatedAt: Date.now() });
-    // Confirmação para quem pediu (útil no /play do chat, onde o painel pode estar fechado).
-    sendToUser(user.id, 'MUSIC_ADDED', { title: info.title, position: s.queue.length - 1 });
+    tracks = tracks.slice(0, MAX_QUEUE - s.queue.length);
+    if (!tracks.length) return fail(`A fila já tem ${MAX_QUEUE} músicas.`);
+    const wasEmpty = s.queue.length === 0;
+    s.queue.push(...tracks.map((t) => ({ ...t, id: randomUUID(), added_by: user.id })));
+    if (wasEmpty) Object.assign(s, { playing: true, position: 0, updatedAt: Date.now() });
+    const who = await nameOf(user.id);
+    if (fromPlaylist) {
+      sendToUser(user.id, 'MUSIC_ADDED', { title: `${tracks.length} músicas da playlist`, position: wasEmpty ? 0 : s.queue.length - tracks.length });
+      notice(s.channelId, `🎵 ${who} pôs ${tracks.length} músicas de uma playlist na fila`, user.id);
+    } else {
+      // Confirmação para quem pediu (útil no /play do chat, onde o painel pode estar fechado).
+      sendToUser(user.id, 'MUSIC_ADDED', { title: tracks[0].title, position: s.queue.length - 1 });
+      notice(s.channelId, wasEmpty ? `🎵 Tocando agora: ${short(tracks[0].title)} (pedida por ${who})` : `🎵 ${who} pôs na fila: ${short(tracks[0].title)}`, user.id);
+    }
     return broadcast(s);
   }
 
-  if (!s || !s.queue.length) return;
+  if (!s || !s.queue.length) {
+    if (msg.action === 'nowplaying') sendToUser(user.id, 'MUSIC_NOTICE', { channel_id: v.channelId, text: 'Nada tocando agora. Use /play para começar.' });
+    return;
+  }
   const current = s.queue[0];
+  const who = () => nameOf(user.id);
 
   switch (msg.action) {
     case 'toggle':
-      Object.assign(s, { position: positionNow(s), playing: !s.playing, updatedAt: Date.now() });
+    case 'pause':
+    case 'resume': {
+      const play = msg.action === 'toggle' ? !s.playing : msg.action === 'resume';
+      if (s.playing === play) return;
+      Object.assign(s, { position: positionNow(s), playing: play, updatedAt: Date.now() });
+      notice(s.channelId, `${play ? '▶️' : '⏸️'} ${await who()} ${play ? 'voltou a tocar' : 'pausou'} a música`, user.id);
       break;
+    }
     case 'seek': {
       const p = Number(msg.position);
       if (!Number.isFinite(p) || p < 0) return;
@@ -143,17 +211,20 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
     case 'skip':
       // Quem clica junto não pula duas músicas: só pula se ainda for a música que a pessoa viu.
       if (msg.track_id && msg.track_id !== current.id) return;
-      next(s);
+      notice(s.channelId, `⏭️ ${await who()} pulou ${short(current.title)}`, user.id);
+      next(s, true);
+      announceNext(s);
       break;
     case 'ended':
       // Todo mundo da call avisa que acabou; só o primeiro aviso conta.
       if (msg.track_id !== current.id) return;
-      next(s);
+      next(s, false);
+      if (s.loop !== 'one') announceNext(s);
       break;
     case 'remove': {
       const i = s.queue.findIndex((t) => t.id === msg.track_id);
       if (i < 0) return;
-      if (i === 0) next(s);
+      if (i === 0) next(s, true);
       else s.queue.splice(i, 1);
       break;
     }
@@ -161,14 +232,38 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
       // Limpa o que vem depois; a música atual continua.
       s.queue = s.queue.slice(0, 1);
       break;
-    case 'pause':
-    case 'resume':
-      if (s.playing === (msg.action === 'resume')) return;
-      Object.assign(s, { position: positionNow(s), playing: msg.action === 'resume', updatedAt: Date.now() });
+    case 'shuffle': {
+      if (s.queue.length < 3) return sendToUser(user.id, 'MUSIC_NOTICE', { channel_id: s.channelId, text: 'Precisa de pelo menos 2 músicas na fila para embaralhar.' });
+      const rest = s.queue.slice(1);
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      s.queue = [current, ...rest];
+      notice(s.channelId, `🔀 ${await who()} embaralhou a fila`, user.id);
       break;
+    }
+    case 'loop': {
+      const order: LoopMode[] = ['off', 'all', 'one'];
+      const mode = order.includes(msg.mode as LoopMode) ? (msg.mode as LoopMode) : order[(order.indexOf(s.loop) + 1) % order.length];
+      if (mode === s.loop) return;
+      s.loop = mode;
+      const label = { off: 'desligou a repetição', all: 'ligou repetir a fila', one: 'ligou repetir esta música' }[mode];
+      notice(s.channelId, `🔁 ${await who()} ${label}`, user.id);
+      break;
+    }
+    case 'nowplaying': {
+      const left = s.queue.length - 1;
+      sendToUser(user.id, 'MUSIC_NOTICE', {
+        channel_id: s.channelId,
+        text: `🎵 ${s.playing ? 'Tocando' : 'Pausada'}: ${short(current.title)} (pedida por ${await nameOf(current.added_by)})${left ? ` · ${left} na fila` : ''}`,
+      });
+      return;
+    }
     case 'stop':
       // Para tudo e esvazia a fila (o /stop do chat).
       s.queue = [];
+      notice(s.channelId, `⏹️ ${await who()} parou a música`, user.id);
       break;
     default:
       return;
@@ -177,9 +272,21 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
   await broadcast(s);
 }
 
-function next(s: MusicState) {
-  s.queue.shift();
+/**
+ * Vai para a próxima música respeitando o "repetir". A faixa repetida ganha um id novo para
+ * o player de todo mundo carregar de novo do começo.
+ * manual = alguém pulou: com "repetir esta música" pula mesmo assim, como nos bots do Discord.
+ */
+function next(s: MusicState, manual: boolean) {
+  const cur = s.queue.shift();
+  if (cur && s.loop === 'one' && !manual) s.queue.unshift({ ...cur, id: randomUUID() });
+  else if (cur && s.loop === 'all') s.queue.push({ ...cur, id: randomUUID() });
   Object.assign(s, { playing: true, position: 0, updatedAt: Date.now() });
+}
+
+function announceNext(s: MusicState) {
+  const t = s.queue[0];
+  if (t) notice(s.channelId, `🎵 Tocando agora: ${short(t.title)}`);
 }
 
 // ---------- Busca pelo nome (API oficial do YouTube) ----------
@@ -247,4 +354,33 @@ export async function searchYouTube(query: string): Promise<SearchResult[]> {
   if (searchCache.size > 500) searchCache.clear();
   searchCache.set(q, { at: Date.now(), results });
   return results;
+}
+
+/** Músicas de uma playlist pública (API oficial). Pula vídeos privados ou apagados. */
+export async function playlistItems(listId: string): Promise<NewTrack[]> {
+  const key = process.env.YOUTUBE_API_KEY?.trim();
+  if (!key) throw new Error('Playlists precisam da YOUTUBE_API_KEY no servidor.');
+  const url = new URL('https://www.googleapis.com/youtube/v3/playlistItems');
+  url.search = new URLSearchParams({ part: 'snippet,status', maxResults: '50', playlistId: listId, key }).toString();
+  let r: Response;
+  try {
+    r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  } catch {
+    throw new Error('O YouTube não respondeu. Tente de novo.');
+  }
+  if (r.status === 404) throw new Error('Essa playlist não existe ou é privada.');
+  if (!r.ok) {
+    const body = (await r.json().catch(() => null)) as { error?: { errors?: { reason?: string }[] } } | null;
+    throw new Error(/quota/i.test(body?.error?.errors?.[0]?.reason ?? '') ? 'Acabou a cota do YouTube de hoje. Amanhã volta.' : 'Não deu para abrir essa playlist.');
+  }
+  const data = (await r.json()) as {
+    items?: { status?: { privacyStatus?: string }; snippet?: { title?: string; videoOwnerChannelTitle?: string; resourceId?: { videoId?: string } } }[];
+  };
+  return (data.items ?? [])
+    .filter((i) => /^[\w-]{11}$/.test(i.snippet?.resourceId?.videoId ?? '') && i.status?.privacyStatus !== 'private' && i.status?.privacyStatus !== 'privacyStatusUnspecified')
+    .map((i) => ({
+      video_id: i.snippet!.resourceId!.videoId!,
+      title: decodeEntities(i.snippet?.title ?? 'Vídeo do YouTube').slice(0, 200),
+      author: decodeEntities(i.snippet?.videoOwnerChannelTitle ?? '').replace(/ - Topic$/, '').slice(0, 100),
+    }));
 }
