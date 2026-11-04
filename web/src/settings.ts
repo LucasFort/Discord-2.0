@@ -31,6 +31,7 @@ export type Settings = {
   attenuateMe: boolean; // abaixa quando você fala
   soundVolume: number; // 0–100 (%) dos sons do app
   soundsOff: Partial<Record<string, boolean>>; // sons desligados um por um
+  soundPack: 'classic' | 'nexo'; // estilo dos sons: clássico (bolhas suaves, estilo Discord antigo) ou Nexo (notas)
   // Transmissão: o que vem marcado quando você abre "Transmitir tela" (salva a última escolha).
   streamResolution: '720' | '1080' | '1440' | 'native';
   streamFps: 15 | 30 | 60;
@@ -99,6 +100,7 @@ const DEFAULTS: Settings = {
   attenuateMe: false,
   soundVolume: 100,
   soundsOff: {},
+  soundPack: 'classic',
   streamResolution: 'native',
   streamFps: 60,
   streamOptimize: 'motion',
@@ -161,7 +163,7 @@ export const getSettings = () => current;
 
 /** Volta as opções de voz para o padrão, sem mexer em volumes de pessoas, transmissão e sons. */
 export function resetVoiceSettings() {
-  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams', 'streamRemoveCall'];
+  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'soundPack', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams', 'streamRemoveCall'];
   const next = { ...DEFAULTS } as Record<string, unknown>;
   for (const k of keep) next[k] = current[k];
   updateSettings(next as Partial<Settings>);

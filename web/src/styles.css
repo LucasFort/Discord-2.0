@@ -602,3 +602,19 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .guild.unread:not(.active)::before { content: ''; position: absolute; left: -14px; top: 50%; width: 4px; height: 8px; margin-top: -4px; border-radius: 0 4px 4px 0; background: var(--text-strong); }
 .guild.has-icon { overflow: visible; } .guild-img { border-radius: inherit; }
 .composer-box textarea:focus { box-shadow: none; border: none; outline: none; }
+
+/* ---------------------------------------------------------------- Tela de carregamento */
+.splash { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 16px; text-align: center; background: var(--bg-2); color: var(--text); }
+.splash-logo { filter: drop-shadow(0 10px 30px rgba(124, 92, 255, .35)); animation: splash-bob 2.4s ease-in-out infinite; }
+.splash-wave { opacity: .25; animation: splash-wave 1.4s ease-in-out infinite; }
+.splash-wave.w2 { animation-delay: .25s; }
+.splash-dot { transform-origin: 50px 50px; animation: splash-dot 1.4s ease-in-out infinite; }
+@keyframes splash-wave { 0%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@keyframes splash-dot { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.25); } }
+@keyframes splash-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+.splash-tip { max-width: 360px; }
+.splash-tip strong { font-size: 12px; letter-spacing: .08em; color: var(--accent-2); }
+.splash-tip p { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--text-strong); }
+.splash-status { color: var(--text-muted); font-size: 13px; }
+.splash .muted { max-width: 360px; }
+@media (prefers-reduced-motion: reduce) { .splash-logo, .splash-wave, .splash-dot { animation: none; } .splash-wave { opacity: 1; } }

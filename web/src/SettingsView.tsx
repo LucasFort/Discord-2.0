@@ -521,6 +521,19 @@ function NotifySettings() {
               onPointerUp={() => playSound('message')}
             />
           </label>
+          <label className="field">
+            <span>Estilo dos sons</span>
+            <select
+              value={s.soundPack}
+              onChange={(e) => {
+                updateSettings({ soundPack: e.target.value as 'classic' | 'nexo' });
+                setTimeout(() => playSound('join'), 0);
+              }}
+            >
+              <option value="classic">Clássico (bolhas suaves)</option>
+              <option value="nexo">Nexo (notas)</option>
+            </select>
+          </label>
           <h3>Sons</h3>
           {(Object.keys(SOUND_LABELS) as SoundName[]).map((name) => (
             <div key={name} className="sound-row">
