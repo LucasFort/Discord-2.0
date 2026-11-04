@@ -157,3 +157,70 @@ function next(s: MusicState) {
   s.queue.shift();
   Object.assign(s, { playing: true, position: 0, updatedAt: Date.now() });
 }
+
+// ---------- Busca pelo nome (API oficial do YouTube) ----------
+// Erros saem com status 400 para a mensagem chegar na tela (o setErrorHandler esconde as de 5xx).
+export type SearchResult = { video_id: string; title: string; author: string; thumbnail: string };
+const searchCache = new Map<string, { at: number; results: SearchResult[] }>();
+const SEARCH_TTL = 6 * 60 * 60 * 1000; // a cota grátis é pequena: a mesma busca não gasta de novo por 6 h
+
+const decodeEntities = (s: string) =>
+  s
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+export const musicSearchEnabled = () => !!process.env.YOUTUBE_API_KEY?.trim();
+
+/** Busca vídeos que podem tocar fora do YouTube. Lança erro com mensagem para mostrar na tela. */
+export async function searchYouTube(query: string): Promise<SearchResult[]> {
+  const key = process.env.YOUTUBE_API_KEY?.trim();
+  if (!key) throw Object.assign(new Error('A busca pelo nome ainda não foi ligada no servidor (falta a chave YOUTUBE_API_KEY). Cole um link do YouTube.'), { statusCode: 400 });
+  const q = query.trim().toLowerCase();
+  const hit = searchCache.get(q);
+  if (hit && Date.now() - hit.at < SEARCH_TTL) return hit.results;
+  const url = new URL('https://www.googleapis.com/youtube/v3/search');
+  url.search = new URLSearchParams({
+    part: 'snippet',
+    type: 'video',
+    videoEmbeddable: 'true',
+    videoSyndicated: 'true',
+    maxResults: '8',
+    q: query.trim(),
+    key,
+  }).toString();
+  let r: Response;
+  try {
+    r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  } catch {
+    throw Object.assign(new Error('O YouTube não respondeu. Tente de novo.'), { statusCode: 400 });
+  }
+  if (!r.ok) {
+    const body = (await r.json().catch(() => null)) as { error?: { errors?: { reason?: string }[] } } | null;
+    const reason = body?.error?.errors?.[0]?.reason ?? '';
+    const msg = /quota/i.test(reason)
+      ? 'Acabou a cota de buscas de hoje. Amanhã volta; até lá, cole o link do YouTube.'
+      : /keyInvalid|badRequest|forbidden|accessNotConfigured/i.test(reason) || r.status === 400 || r.status === 403
+        ? 'A chave do YouTube no servidor não funcionou (confira se a YouTube Data API v3 está ativada). Cole um link por enquanto.'
+        : 'A busca do YouTube falhou. Tente de novo.';
+    throw Object.assign(new Error(msg), { statusCode: 400 });
+  }
+  const data = (await r.json()) as {
+    items?: { id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; liveBroadcastContent?: string; thumbnails?: Record<string, { url?: string }> } }[];
+  };
+  const results = (data.items ?? [])
+    .filter((i) => i.id?.videoId && /^[\w-]{11}$/.test(i.id.videoId))
+    .map((i) => ({
+      video_id: i.id!.videoId!,
+      title: decodeEntities(i.snippet?.title ?? 'Vídeo do YouTube'),
+      author: decodeEntities(i.snippet?.channelTitle ?? ''),
+      thumbnail: `https://i.ytimg.com/vi/${i.id!.videoId}/mqdefault.jpg`,
+    }));
+  if (searchCache.size > 500) searchCache.clear();
+  searchCache.set(q, { at: Date.now(), results });
+  return results;
+}

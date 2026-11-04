@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ListMusic, Music, Pause, Play, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-react';
-import type { Guild } from './api';
+import { ArrowLeft, ListMusic, Music, Pause, Play, Plus, Search, SkipForward, Trash2, Volume2, VolumeX, X } from 'lucide-react';
+import { api, type Guild } from './api';
 import { musicPosition, type Gateway, type MusicState } from './store';
 import { toast } from './toast';
 
@@ -225,6 +225,8 @@ export function MusicMiniPlayer({ music, gateway, deafened, onOpenQueue }: {
   );
 }
 
+type SearchResult = { video_id: string; title: string; author: string; thumbnail: string };
+
 /** Painel "Música" na tela da call: colar link, ver e mexer na fila. */
 export function MusicPanel({ music, gateway, guild, onClose }: {
   music?: MusicState;
@@ -234,6 +236,9 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
 }) {
   const [url, setUrl] = useState('');
   const [adding, setAdding] = useState(false);
+  // Busca pelo nome: null = mostrando a fila; senão, os resultados (ou carregando / erro).
+  const [search, setSearch] = useState<{ q: string; loading: boolean; results: SearchResult[]; error?: string } | null>(null);
+  const searchSeq = useRef(0);
   const queueLen = music?.queue.length ?? 0;
   // A fila mudou (a música entrou) ou deu erro: libera o botão. Sem resposta em 8 s, libera também.
   useEffect(() => setAdding(false), [queueLen]);
@@ -249,9 +254,26 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
     e.preventDefault();
     const v = url.trim();
     if (!v) return;
-    send('add', { url: v });
-    setUrl('');
+    // Link do YouTube: entra direto na fila. Qualquer outra coisa: busca pelo nome.
+    if (/youtu\.?be|youtube\.com|^https?:\/\//i.test(v)) {
+      send('add', { url: v });
+      setUrl('');
+      setAdding(true);
+      setSearch(null);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearch({ q: v, loading: true, results: [] });
+    api<{ results: SearchResult[] }>('GET', `/music/search?q=${encodeURIComponent(v)}`)
+      .then((r) => seq === searchSeq.current && setSearch({ q: v, loading: false, results: r.results }))
+      .catch((err: Error) => seq === searchSeq.current && setSearch({ q: v, loading: false, results: [], error: err.message }));
+  };
+  const pick = (r: SearchResult) => {
+    send('add', { url: r.video_id });
     setAdding(true);
+    setSearch(null);
+    setUrl('');
+    toast(`Adicionada: ${r.title}`);
   };
   const [now, ...next] = music?.queue ?? [];
   return (
@@ -261,13 +283,34 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
         <button className="icon small" title="Fechar" onClick={onClose}><X size={16} /></button>
       </header>
       <form className="music-add" onSubmit={add}>
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Cole um link do YouTube" aria-label="Link do YouTube" />
-        <button className="primary" disabled={adding || !url.trim()}>{adding ? '…' : 'Adicionar'}</button>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Nome da música ou link do YouTube" aria-label="Nome da música ou link do YouTube" />
+        <button className="primary" disabled={adding || !url.trim() || !!search?.loading} title={/youtu\.?be|youtube\.com|^https?:\/\//i.test(url.trim()) ? 'Adicionar na fila' : 'Buscar no YouTube'}>
+          {adding || search?.loading ? '…' : /youtu\.?be|youtube\.com|^https?:\/\//i.test(url.trim()) ? <Plus size={16} /> : <Search size={16} />}
+        </button>
       </form>
       <div className="people-list">
-        {!now ? (
+        {search ? (
+          <>
+            <div className="music-section">
+              <button className="link music-back" onClick={() => (searchSeq.current++, setSearch(null))}><ArrowLeft size={14} /> Voltar para a fila</button>
+            </div>
+            {search.loading && <p className="music-empty">Buscando "{search.q}"…</p>}
+            {search.error && <p className="music-empty error">{search.error}</p>}
+            {!search.loading && !search.error && search.results.length === 0 && <p className="music-empty">Nada encontrado para "{search.q}".</p>}
+            {search.results.map((r) => (
+              <button key={r.video_id} className="music-row music-result" title={`Adicionar "${r.title}" na fila`} onClick={() => pick(r)}>
+                <img src={r.thumbnail} alt="" loading="lazy" />
+                <div className="music-row-text">
+                  <strong>{r.title}</strong>
+                  {r.author && <small>{r.author}</small>}
+                </div>
+                <Plus size={16} className="music-result-add" />
+              </button>
+            ))}
+          </>
+        ) : !now ? (
           <p className="music-empty">
-            Nada tocando. Cole o link de um vídeo do YouTube e todo mundo da call ouve junto, no mesmo ponto.
+            Nada tocando. Digite o nome de uma música (ou cole um link do YouTube) e todo mundo da call ouve junto, no mesmo ponto.
           </p>
         ) : (
           <>
