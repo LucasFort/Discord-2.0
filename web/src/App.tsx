@@ -3,8 +3,9 @@ import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
   Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
-  ChevronDown, DoorOpen,
+  ChevronDown, DoorOpen, Music,
 } from 'lucide-react';
+import { MusicMiniPlayer, MusicPanel } from './music';
 import { api, API_MISSING, APP_NAME, getToken, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
@@ -107,6 +108,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const [guildId, setGuildId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [view, setView] = useState<'text' | 'voice'>('text');
+  const [musicOpen, setMusicOpen] = useState(false);
   const [sideMenu, setSideMenu] = useState<CallMenuState | null>(null);
 
   // Silenciado/ensurdecido pelo dono do servidor: o microfone e o som seguem o que o servidor manda.
@@ -266,6 +268,15 @@ function Main({ onLogout }: { onLogout: () => void }) {
         ) : (
           <div className="empty">Crie um servidor ou entre com um convite.</div>
         )}
+        {voice.channelId && state.music[voice.channelId] && (
+          <MusicMiniPlayer
+            key={voice.channelId}
+            music={state.music[voice.channelId]}
+            gateway={gateway}
+            deafened={voice.deafened || voice.serverDeafened}
+            onOpenQueue={() => (setView('voice'), setMusicOpen(true))}
+          />
+        )}
         {voice.channelId && <VoiceBar voice={voice} channelName={voiceChannel?.name ?? 'Voz'} onOpen={() => setView('voice')} />}
         <div className="userbar">
           <button className="userbar-me" title="Mudar status" onClick={() => setStatusMenu((v) => !v)}>
@@ -300,6 +311,10 @@ function Main({ onLogout }: { onLogout: () => void }) {
             guild={voiceGuild}
             isOwner={!!voiceGuild && voiceGuild.owner_id === state.user.id}
             onSettings={() => setSettingsOpen('voice')}
+            music={state.music[voice.channelId]}
+            gateway={gateway}
+            musicOpen={musicOpen}
+            setMusicOpen={setMusicOpen}
           />
         ) : textChannel ? (
           <Chat key={textChannel.id} channel={textChannel} guild={guild} state={state} dispatch={dispatch} gateway={gateway} onOpenChannel={(id) => (setChannelId(id), setView('text'))} />
@@ -428,6 +443,11 @@ function ChannelList(props: {
               <span className="hash">{type === 'text' ? <Hash size={18} /> : <Volume2 size={18} />}</span> <span className="channel-name">{c.name}</span>
               {type === 'text' && mentionCount(c.id) > 0 && <span className="count-badge">{mentionCount(c.id)}</span>}
             </button>
+            {type === 'voice' && state.music[c.id] && (
+              <div className="voice-music" title={state.music[c.id].queue[0].title}>
+                <Music size={12} /> <span>{state.music[c.id].queue[0].title}</span>
+              </div>
+            )}
             {type === 'voice' &&
               guild.members
                 .filter((m) => state.voice[m.id] === c.id)
@@ -521,16 +541,22 @@ function VoiceBar({ voice, channelName, onOpen }: { voice: Voice; channelName: s
   );
 }
 
-function VoiceView({ voice, channelName, voiceFlags, guild, isOwner, onSettings }: {
+function VoiceView({ voice, channelName, voiceFlags, guild, isOwner, onSettings, music, gateway, musicOpen, setMusicOpen }: {
   voice: Voice;
   channelName: string;
   voiceFlags: State['voiceFlags'];
   guild?: Guild;
   isOwner: boolean;
   onSettings: () => void;
+  music?: State['music'][string];
+  gateway: Gateway;
+  musicOpen: boolean;
+  setMusicOpen: (open: boolean) => void;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
-  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [peopleOpenRaw, setPeopleOpen] = useState(false);
+  // Um painel lateral por vez: abrir a música fecha "Pessoas" e vice-versa.
+  const peopleOpen = peopleOpenRaw && !musicOpen;
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [stageStats, setStageStats] = useState(false);
   // Em destaque: 's:<id>' para a transmissão de alguém, 'u:<id>' para a pessoa (câmera ou avatar).
@@ -582,14 +608,21 @@ function VoiceView({ voice, channelName, voiceFlags, guild, isOwner, onSettings 
     );
 
   return (
-    <div className={`voice-view ${peopleOpen ? 'with-people' : ''}`}>
+    <div className={`voice-view ${peopleOpen || musicOpen ? 'with-people' : ''}`}>
       <header className="topbar">
         <span className="hash"><Volume2 size={20} /></span> {channelName}
         {voice.reconnecting && <span className="badge warn">Reconectando…</span>}
-        <button className={`icon topbar-end ${peopleOpen ? 'active' : ''}`} title="Pessoas na call e volumes" onClick={() => setPeopleOpen((o) => !o)}>
-          <Users size={20} /> <small>{voice.users.length}</small>
-        </button>
+        <span className="topbar-end">
+          <button className={`icon ${musicOpen ? 'active' : ''} ${music?.playing ? 'music-on' : ''}`} title="Ouvir junto (música do YouTube)" onClick={() => (setMusicOpen(!musicOpen), setPeopleOpen(false))}>
+            <Music size={20} />
+            {music && <small>{music.queue.length}</small>}
+          </button>
+          <button className={`icon ${peopleOpen ? 'active' : ''}`} title="Pessoas na call e volumes" onClick={() => (setPeopleOpen(!peopleOpen), setMusicOpen(false))}>
+            <Users size={20} /> <small>{voice.users.length}</small>
+          </button>
+        </span>
       </header>
+      {musicOpen && <MusicPanel music={music} gateway={gateway} guild={guild} onClose={() => setMusicOpen(false)} />}
       {peopleOpen && (
         <PeoplePanel voice={voice} voiceFlags={voiceFlags} guild={guild} isOwner={isOwner} onClose={() => setPeopleOpen(false)} />
       )}
