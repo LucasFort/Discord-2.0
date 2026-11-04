@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CornerUpLeft, File as FileIcon, Hash, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
+import { CornerUpLeft, File as FileIcon, Hash, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
 import { api, fileUrl, type Attachment, type Channel, type Guild, type Message, type User } from './api';
 import { ask } from './ask';
 import { playSound } from './sounds';
@@ -8,6 +8,7 @@ import type { Gateway, State } from './store';
 import { Avatar, openProfile } from './profile';
 import { mentionsMe } from './notify';
 import { lastRead, markRead, setActiveChannel } from './unread';
+import { MUSIC_COMMANDS, runMusicCommand } from './music';
 
 const MAX_FILE = 8 * 1024 * 1024;
 const MAX_FILES = 4;
@@ -184,6 +185,7 @@ export function Chat(props: { channel: Channel; guild: Guild; state: State; disp
             onSent={() => ((stick.current = true), setReplyTo(null))}
             onTyping={() => gateway.send({ op: 'typing', channel_id: channel.id })}
             onEditLast={editLast}
+            onCommand={(raw) => runMusicCommand(raw, gateway, !!state.voice[me.id])}
           />
           <div className="typing">{typingNames.length > 0 && `${typingNames.join(', ')} ${typingNames.length > 1 ? 'estão' : 'está'} digitando…`}</div>
         </div>
@@ -211,7 +213,7 @@ async function editMessage(msg: Message) {
 // ---------------------------------------------------------------- Caixa de mensagem
 type ComposerApi = { focus: () => void; addFiles: (files: File[]) => void };
 
-function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast }: {
+function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast, onCommand }: {
   apiRef: React.MutableRefObject<ComposerApi | null>;
   channel: Channel;
   members: User[];
@@ -221,8 +223,10 @@ function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent
   onSent: () => void;
   onTyping: () => void;
   onEditLast: () => void;
+  onCommand: (raw: string) => boolean; // comandos de música (/play…): true = tratado, não vira mensagem
 }) {
   const s = useSettings();
+  const [cmdSel, setCmdSel] = useState(0);
   const [text, setText] = useState('');
   const [files, setFiles] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
@@ -310,9 +314,24 @@ function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent
     setText(text.slice(0, start) + str + text.slice(end));
   };
 
+  // Digitando "/" no começo: sugere os comandos de música, como os bots do Discord.
+  const cmdQuery = /^\/(\w*)$/.exec(text)?.[1]?.toLowerCase();
+  const commands = cmdQuery === undefined ? [] : MUSIC_COMMANDS.filter((c) => c.name.startsWith(cmdQuery));
+  const pickCommand = (i: number) => {
+    const c = commands[i];
+    if (!c) return;
+    caret.current = c.name.length + 2;
+    setText(`/${c.name} `);
+    setCmdSel(0);
+  };
+
   const send = async () => {
     const raw = text.trim();
     if ((!raw && !files.length) || sending) return;
+    if (raw.startsWith('/') && !files.length && onCommand(raw)) {
+      setText('');
+      return;
+    }
     const content = getSettings().convertEmoticons ? convertEmoticons(raw) : raw;
     setSending(true);
     try {
@@ -333,6 +352,18 @@ function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (commands.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const d = e.key === 'ArrowDown' ? 1 : -1;
+        setCmdSel((cmdSel + d + commands.length) % commands.length);
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !commands.some((c) => c.name === cmdQuery && !c.args))) {
+        e.preventDefault();
+        return pickCommand(Math.min(cmdSel, commands.length - 1));
+      }
+    }
     if (mention && candidates.length) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -379,6 +410,18 @@ function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent
               <small className="muted">{fmtSize(f.size)}</small>
               <button className="icon small danger" title="Tirar" onClick={() => setFiles((cur) => cur.filter((x) => x.key !== f.key))}><Trash2 size={14} /></button>
             </div>
+          ))}
+        </div>
+      )}
+      {commands.length > 0 && (
+        <div className="mention-popup">
+          <small className="muted">Comandos de música</small>
+          {commands.map((c, i) => (
+            <button key={c.name} className={i === Math.min(cmdSel, commands.length - 1) ? 'active' : ''} onMouseDown={(e) => (e.preventDefault(), pickCommand(i))} onMouseEnter={() => setCmdSel(i)}>
+              <span className="mention-all"><Music size={14} /></span>
+              <strong>/{c.name}</strong> {c.args && <small className="muted">{c.args}</small>}
+              <small className="muted cmd-desc">{c.desc}</small>
+            </button>
           ))}
         </div>
       )}

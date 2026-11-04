@@ -94,8 +94,21 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
   let s = states.get(v.channelId);
 
   if (msg.action === 'add') {
-    const id = youtubeId(String(msg.url ?? ''));
-    if (!id) return sendToUser(user.id, 'MUSIC_ERROR', { message: 'Cole um link de vídeo do YouTube.' });
+    const input = String(msg.url ?? '').trim().slice(0, 200);
+    let id = youtubeId(input);
+    // Não é link (ex.: "/play despacito" no chat): toca o primeiro resultado da busca.
+    if (!id && input && musicSearchEnabled()) {
+      try {
+        id = (await searchYouTube(input))[0]?.video_id ?? null;
+      } catch (e) {
+        return sendToUser(user.id, 'MUSIC_ERROR', { message: (e as Error).message });
+      }
+      if (!id) return sendToUser(user.id, 'MUSIC_ERROR', { message: `Nada encontrado para "${input}".` });
+    }
+    if (!id)
+      return sendToUser(user.id, 'MUSIC_ERROR', {
+        message: musicSearchEnabled() || !input ? 'Cole um link de vídeo do YouTube.' : 'A busca pelo nome ainda não foi ligada no servidor (falta a YOUTUBE_API_KEY). Use um link do YouTube.',
+      });
     if (s && s.queue.length >= MAX_QUEUE) return sendToUser(user.id, 'MUSIC_ERROR', { message: `A fila já tem ${MAX_QUEUE} músicas.` });
     const info = await videoInfo(id);
     if (!info) return sendToUser(user.id, 'MUSIC_ERROR', { message: 'Esse vídeo não existe, é privado ou o dono não deixa tocar fora do YouTube.' });
@@ -109,6 +122,8 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
     }
     s.queue.push({ id: randomUUID(), video_id: id, title: info.title, author: info.author, added_by: user.id });
     if (s.queue.length === 1) Object.assign(s, { playing: true, position: 0, updatedAt: Date.now() });
+    // Confirmação para quem pediu (útil no /play do chat, onde o painel pode estar fechado).
+    sendToUser(user.id, 'MUSIC_ADDED', { title: info.title, position: s.queue.length - 1 });
     return broadcast(s);
   }
 
@@ -145,6 +160,15 @@ export async function handleMusicOp(user: Pick<User, 'id'>, msg: MusicOp) {
     case 'clear':
       // Limpa o que vem depois; a música atual continua.
       s.queue = s.queue.slice(0, 1);
+      break;
+    case 'pause':
+    case 'resume':
+      if (s.playing === (msg.action === 'resume')) return;
+      Object.assign(s, { position: positionNow(s), playing: msg.action === 'resume', updatedAt: Date.now() });
+      break;
+    case 'stop':
+      // Para tudo e esvazia a fila (o /stop do chat).
+      s.queue = [];
       break;
     default:
       return;

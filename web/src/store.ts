@@ -286,6 +286,7 @@ export function useStore(onUnauthorized: () => void) {
           }
           if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
           if (msg.t === 'MUSIC_ERROR') return toast(msg.d?.message ?? 'Não deu para tocar essa música.', 'error');
+          if (msg.t === 'MUSIC_ADDED') return toast(msg.d.position > 0 ? `Na fila (${msg.d.position}º): ${msg.d.title}` : `Tocando: ${msg.d.title}`);
           if (msg.t === 'MESSAGE_CREATE') noteMessage(msg.d, meUser.current);
           // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
           // "Não perturbe" silencia os dois, como no Discord.
