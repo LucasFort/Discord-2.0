@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { userFromToken } from './auth.js';
+import { handleMusicOp, musicStatesFor, onVoiceChannelLeft } from './music.js';
 import { getChannel, getStatus, guildPayload, guildsOf, isMember, memberIds, type User, type UserStatus } from './db.js';
 
 /**
@@ -16,6 +17,7 @@ const voiceStates = new Map<string, { userId: string; channelId: string; guildId
 const serverMod = new Map<string, { mute: boolean; deaf: boolean }>();
 export const getServerMod = (guildId: string, userId: string) => serverMod.get(`${guildId}:${userId}`) ?? { mute: false, deaf: false };
 export const voiceStateOf = (userId: string) => voiceStates.get(userId);
+export const channelHasPeople = (channelId: string) => [...voiceStates.values()].some((v) => v.channelId === channelId);
 
 /** Muda o silenciar/ensurdecer do servidor e avisa todo mundo se a pessoa está na voz desse servidor. */
 export async function setServerMod(guildId: string, userId: string, patch: Partial<{ mute: boolean; deaf: boolean }>) {
@@ -111,6 +113,7 @@ export async function setVoiceState(user: Pick<User, 'id'>, channelId: string | 
   if (prev) {
     voiceStates.delete(user.id);
     await sendToGuild(prev.guildId, 'VOICE_STATE_UPDATE', { user_id: user.id, guild_id: prev.guildId, channel_id: null });
+    await onVoiceChannelLeft(prev.channelId);
   }
   if (!channelId) return;
   const ch = await getChannel(channelId);
@@ -153,6 +156,7 @@ export function registerGateway(app: FastifyInstance) {
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))
               .map(voicePayload),
+            music: musicStatesFor(new Set(guilds.map((g) => g.id))),
           },
         }),
       );
@@ -166,7 +170,7 @@ export function registerGateway(app: FastifyInstance) {
       await ready;
       const u = user;
       if (!u) return;
-      let msg: { op?: string; channel_id?: string | null; idle?: boolean };
+      let msg: { op?: string; channel_id?: string | null; idle?: boolean; action?: string; url?: string; track_id?: string; position?: number };
       try {
         msg = JSON.parse(String(raw));
       } catch {
@@ -180,6 +184,7 @@ export function registerGateway(app: FastifyInstance) {
             await sendToGuild(ch.guild_id, 'TYPING_START', { channel_id: ch.id, user_id: u.id });
         }
         if (msg.op === 'voice_state') await setVoiceState(u, msg.channel_id ?? null, readFlags(msg));
+        if (msg.op === 'music') await handleMusicOp(u, msg);
         if (msg.op === 'idle') {
           if (msg.idle) afk.add(u.id);
           else afk.delete(u.id);

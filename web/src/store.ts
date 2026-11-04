@@ -5,6 +5,7 @@ import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Pres
 import { startIdleWatch } from './activity';
 import { notifyMessage, setMe } from './notify';
 import { noteMessage } from './unread';
+import { toast } from './toast';
 
 export type State = {
   ready: boolean;
@@ -18,12 +19,36 @@ export type State = {
   messages: Record<string, Message[]>; // channelId -> messages
   typing: Record<string, Record<string, number>>; // channelId -> userId -> expires at
   voiceAction: VoiceServerAction | null; // última ação do dono do servidor sobre mim (desconectar, mover…)
+  music: Record<string, MusicState>; // voice channelId -> fila do "Ouvir junto"
 };
+
+export type MusicTrack = { id: string; video_id: string; title: string; author: string; added_by: string };
+export type MusicState = {
+  guild_id: string;
+  channel_id: string;
+  queue: MusicTrack[]; // queue[0] = tocando agora
+  playing: boolean;
+  position: number; // segundos no instante updated_at (relógio do servidor)
+  updated_at: number;
+  server_now: number;
+};
+/** Diferença entre o relógio do servidor e o meu, para todo mundo ouvir no mesmo ponto da música. */
+let serverSkew = 0;
+export const musicPosition = (m: MusicState) => m.position + (m.playing ? Math.max(0, Date.now() + serverSkew - m.updated_at) / 1000 : 0);
+function withMusic(music: State['music'], list: MusicState[]) {
+  const next = { ...music };
+  for (const m of list) {
+    serverSkew = m.server_now - Date.now();
+    if (m.queue.length) next[m.channel_id] = m;
+    else delete next[m.channel_id];
+  }
+  return next;
+}
 
 export type VoiceServerAction = { n: number; action: 'mute' | 'deafen' | 'disconnect' | 'move'; by: string; channel_id?: string };
 
 type Action =
-  | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; presences: PresenceItem[]; voice_states: VoiceState[] } }
+  | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; presences: PresenceItem[]; voice_states: VoiceState[]; music?: MusicState[] } }
   | { t: 'GUILD_CREATE'; d: Guild & { presences?: PresenceItem[] } }
   | { t: 'GUILD_UPDATE'; d: Omit<Guild, 'channels' | 'members'> }
   | { t: 'GUILD_DELETE'; d: { id: string } }
@@ -40,7 +65,8 @@ type Action =
   | { t: 'VOICE_STATE_UPDATE'; d: VoiceState }
   | { t: 'TYPING_START'; d: { channel_id: string; user_id: string } }
   | { t: 'TYPING_SWEEP' }
-  | { t: 'VOICE_SERVER_ACTION'; d: Omit<VoiceServerAction, 'n'> };
+  | { t: 'VOICE_SERVER_ACTION'; d: Omit<VoiceServerAction, 'n'> }
+  | { t: 'MUSIC_STATE'; d: MusicState };
 
 type PresenceItem = { user_id: string; status: Presence };
 const presenceMap = (items: PresenceItem[] = []) =>
@@ -58,7 +84,7 @@ export type VoiceFlags = {
 };
 type VoiceState = { user_id: string; guild_id: string; channel_id: string | null } & VoiceFlags;
 
-const initial: State = { ready: false, connection: 0, user: null, status: 'online', guilds: [], presence: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null };
+const initial: State = { ready: false, connection: 0, user: null, status: 'online', guilds: [], presence: {}, voice: {}, voiceFlags: {}, messages: {}, typing: {}, voiceAction: null, music: {} };
 
 function sortChannels(chs: Channel[]) {
   return [...chs].sort((a, b) => (a.type === b.type ? a.position - b.position : a.type === 'text' ? -1 : 1));
@@ -94,6 +120,7 @@ function reducer(s: State, a: Action): State {
         voice,
         voiceFlags,
         messages: s.messages,
+        music: withMusic({}, a.d.music ?? []),
       };
     }
     case 'GUILD_CREATE': {
@@ -201,6 +228,8 @@ function reducer(s: State, a: Action): State {
         typing: { ...s.typing, [a.d.channel_id]: { ...s.typing[a.d.channel_id], [a.d.user_id]: Date.now() + 8000 } },
       };
     }
+    case 'MUSIC_STATE':
+      return { ...s, music: withMusic(s.music, [a.d]) };
     case 'VOICE_SERVER_ACTION':
       return { ...s, voiceAction: { ...a.d, n: (s.voiceAction?.n ?? 0) + 1 } };
     case 'TYPING_SWEEP': {
@@ -256,6 +285,7 @@ export function useStore(onUnauthorized: () => void) {
             statusRef.current = msg.d.status ?? 'online';
           }
           if (msg.t === 'STATUS_UPDATE') statusRef.current = msg.d.status;
+          if (msg.t === 'MUSIC_ERROR') return toast(msg.d?.message ?? 'Não deu para tocar essa música.', 'error');
           if (msg.t === 'MESSAGE_CREATE') noteMessage(msg.d, meUser.current);
           // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
           // "Não perturbe" silencia os dois, como no Discord.
