@@ -1,3 +1,5 @@
+import type { Overwrite, Role } from './permissions';
+
 /** Perfil público. A foto é uma imagem pequena em data URL. */
 export type User = {
   id: string;
@@ -14,9 +16,16 @@ export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
 /** O que aparece para os outros (bolinha ao lado da foto). */
 export type Presence = 'online' | 'idle' | 'dnd' | 'offline';
 export const STATUS_LABELS: Record<UserStatus, string> = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' };
-export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null };
+export type Channel = {
+  id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null;
+  overwrites?: Overwrite[]; // permissões do canal por cargo
+};
 /** is_dm = 1: conversa direta (um "servidor" escondido com duas pessoas, um canal de texto e um de voz). */
-export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; is_dm?: number; channels: Channel[]; members: User[] };
+export type Guild = {
+  id: string; name: string; owner_id: string; icon?: string | null; is_dm?: number; channels: Channel[]; members: User[];
+  roles?: Role[]; // do mais alto para o mais baixo; o @everyone tem o id do servidor
+  member_roles?: Record<string, string[]>; // userId -> cargos
+};
 export const isDm = (g: Pick<Guild, 'is_dm'> | undefined) => !!g && !!Number(g.is_dm ?? 0);
 /** Dono de verdade: conversa direta não tem dono. */
 export const ownsGuild = (g: Pick<Guild, 'is_dm' | 'owner_id'> | undefined, userId: string | undefined) => !!g && !isDm(g) && g.owner_id === userId;

@@ -6,12 +6,12 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 
 - Cadastro e login (senha com bcrypt, sessão por JWT, limite de 10 tentativas por minuto)
 - Criar servidor (já vem com `#geral` e o canal de voz `Geral`), convidar por link (`/convite/CODIGO`, válido por 7 dias) e entrar com convite
-- Canais de texto e de voz (só o dono do servidor cria canais por enquanto)
+- Canais de texto e de voz, incluindo **canais privados** (só os cargos liberados veem)
 - Chat em tempo real: enviar, editar (↑ edita a última), apagar, histórico com rolagem infinita, "fulano está digitando", Shift+Enter para nova linha, rascunho por canal, markdown (`**negrito**`, `*itálico*`, `__sublinhado__`, `~~riscado~~`, `` `código` ``, blocos ```` ``` ````, `||spoiler||`, links)
 - **Responder** a uma mensagem (com a citação clicável), **anexos** (botão +, colar ou arrastar; até 4 arquivos de 8 MB; imagens e vídeos aparecem no chat, imagem amplia ao clicar), prévia de links de imagem
 - **@menções** com autocompletar (`@usuario` e `@todos`), destaque de quem foi mencionado
 - **Emojis**: seletor com busca e recentes, na mensagem e nas reações (qualquer emoji); reações rápidas ao passar o mouse
-- **Fixar mensagens** (autor ou dono) e painel de fixadas; **busca** de mensagens no servidor
+- **Fixar mensagens** (autor ou quem pode gerenciar mensagens) e painel de fixadas; **busca** de mensagens no servidor
 - **Não lidas**: canal em negrito, contador vermelho de menções no canal e no ícone do servidor, linha "NOVAS" ao abrir o canal
 - Sons: entrada e saída na call, mutar e desmutar, mensagem nova com a aba em segundo plano (o sino na barra do usuário desliga)
 - Avisos na tela ("fulano entrou na call") e emojis que sobem flutuando na call para todo mundo
@@ -21,7 +21,8 @@ Primeira versão do app: contas, servidores com convite, canais de texto e de vo
 - Câmera
 - **Conta e perfil** como no Discord: nome de exibição, usuário, senha, foto, banner, pronomes, "sobre mim" e status personalizado; cartão de perfil ao clicar em alguém
 - **Status**: Disponível, Ausente (também sozinho depois de 10 minutos parado), Não perturbe (sem avisos nem sons) e Invisível
-- **Configurações do servidor** (dono): nome e ícone, renomear/tópico/apagar canais, expulsar membros, convites com validade e limite de usos, apagar servidor; quem não é dono pode sair do servidor
+- **Cargos e permissões**: cargos com cor no nome, grupo separado na lista de membros e 16 permissões (ver, enviar, anexar, reagir, gerenciar mensagens, conectar, falar, transmitir, convidar, gerenciar canais/cargos/servidor, expulsar, silenciar, mover, administrador); permissões por canal (permitir / padrão / negar por cargo); hierarquia (só mexe em quem está abaixo)
+- **Configurações do servidor** (cada aba pede a sua permissão): nome e ícone, cargos, renomear/tópico/apagar canais, expulsar membros, convites com validade e limite de usos, apagar servidor; quem não é dono pode sair do servidor
 - **Configurações do app**: aparência (tema escuro, meia-noite, claro ou do sistema; confortável ou compacto; fonte, espaçamento, zoom, 24 h), acessibilidade (saturação, reduzir movimento), chat (emoticons viram emoji, reações, links, spoilers), avisos na área de trabalho (todas, só menções ou nenhuma), lista de atalhos, modo streamer e opções do Windows no app (abrir com o computador, começar minimizado, fechar para a bandeja)
 - **Configurações** de voz (engrenagem ao lado do seu nome ou na call): escolher microfone, saída de som e câmera; volume de entrada e de saída; teste de microfone com medidor e "ouvir minha voz"; detecção de voz com sensibilidade automática ou manual; aperte para falar com tecla e atraso ao soltar; supressão de ruído, cancelamento de eco e ganho automático; prévia da câmera. Ficam salvas no computador de cada um.
 - Volume de cada pessoa na call (passe o mouse no quadrado dela)
@@ -112,4 +113,4 @@ web/src/
 
 ## Próximos passos (fase 2 do roadmap)
 
-Cargos e permissões, bloquear pessoas, conversas em grupo, versão para Mac.
+Bloquear pessoas, conversas em grupo, versão para Mac.

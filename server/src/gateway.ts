@@ -3,8 +3,9 @@ import type { FastifyInstance } from 'fastify';
 import { userFromToken } from './auth.js';
 import { handleMusicOp, musicStatesFor, onVoiceChannelLeft } from './music.js';
 import {
-  getChannel, getStatus, guildPayload, guildsOf, isMember, memberIds, relationshipIds, relationshipsOf, type User, type UserStatus,
+  getChannel, getStatus, guildsOf, memberIds, relationshipIds, relationshipsOf, type Channel, type User, type UserStatus,
 } from './db.js';
+import { guildPayload, permContext, P, type PermContext } from './permissions.js';
 
 /**
  * Real-time gateway. One WebSocket per open client tab.
@@ -54,6 +55,13 @@ export function sendToUser(userId: string, t: string, d: unknown) {
 
 export async function sendToGuild(guildId: string, t: string, d: unknown) {
   for (const id of await memberIds(guildId)) sendToUser(id, t, d);
+}
+
+/** Evento de um canal: só para quem pode ver o canal (canais privados não vazam). */
+export async function sendToChannel(ch: Pick<Channel, 'id' | 'guild_id'>, t: string, d: unknown, ctx?: PermContext) {
+  const c = ctx ?? (await permContext(ch.guild_id));
+  if (!c) return;
+  for (const id of c.members) if (c.can(id, P.VIEW_CHANNEL, ch.id)) sendToUser(id, t, d);
 }
 
 export const isOnline = (userId: string) => (sockets.get(userId)?.size ?? 0) > 0;
@@ -121,7 +129,7 @@ export async function setVoiceState(user: Pick<User, 'id'>, channelId: string | 
   }
   if (!channelId) return;
   const ch = await getChannel(channelId);
-  if (!ch || ch.type !== 'voice' || !(await isMember(ch.guild_id, user.id))) return;
+  if (!ch || ch.type !== 'voice' || !(await permContext(ch.guild_id))?.can(user.id, P.VIEW_CHANNEL | P.CONNECT, ch.id)) return;
   const state = { userId: user.id, channelId, guildId: ch.guild_id, ...flags };
   voiceStates.set(user.id, state);
   await sendToGuild(ch.guild_id, 'VOICE_STATE_UPDATE', voicePayload(state));
@@ -146,7 +154,8 @@ export function registerGateway(app: FastifyInstance) {
       set.add(ws);
       sockets.set(user.id, set);
 
-      const guilds = await Promise.all((await guildsOf(user.id)).map(guildPayload));
+      const me = user;
+      const guilds = await Promise.all((await guildsOf(user.id)).map((g) => guildPayload(g, me.id)));
       const relationships = await relationshipsOf(user.id);
       const visible = new Set([...guilds.flatMap((g) => g.members.map((m) => m.id)), ...relationships.map((r) => r.user.id)]);
       if (ws.readyState !== 1) return;
@@ -186,8 +195,9 @@ export function registerGateway(app: FastifyInstance) {
         if (msg.op === 'ping' && ws.readyState === 1) ws.send(JSON.stringify({ t: 'PONG', d: null }));
         if (msg.op === 'typing' && msg.channel_id) {
           const ch = await getChannel(msg.channel_id);
-          if (ch && (await isMember(ch.guild_id, u.id)))
-            await sendToGuild(ch.guild_id, 'TYPING_START', { channel_id: ch.id, user_id: u.id });
+          const ctx = ch && (await permContext(ch.guild_id));
+          if (ch && ctx?.can(u.id, P.VIEW_CHANNEL | P.SEND_MESSAGES, ch.id))
+            await sendToChannel(ch, 'TYPING_START', { channel_id: ch.id, user_id: u.id }, ctx);
         }
         if (msg.op === 'voice_state') await setVoiceState(u, msg.channel_id ?? null, readFlags(msg));
         if (msg.op === 'music') await handleMusicOp(u, msg);

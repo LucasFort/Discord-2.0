@@ -52,6 +52,7 @@ type Action =
   | { t: 'READY'; d: { user: User; status?: UserStatus; guilds: Guild[]; relationships?: Relationship[]; presences: PresenceItem[]; voice_states: VoiceState[]; music?: MusicState[] } }
   | { t: 'GUILD_CREATE'; d: Guild & { presences?: PresenceItem[] } }
   | { t: 'GUILD_UPDATE'; d: Omit<Guild, 'channels' | 'members'> }
+  | { t: 'GUILD_SYNC'; d: Pick<Guild, 'id' | 'roles' | 'member_roles' | 'channels'> }
   | { t: 'GUILD_DELETE'; d: { id: string } }
   | { t: 'GUILD_MEMBER_ADD'; d: { guild_id: string; user: User; status?: Presence } }
   | { t: 'GUILD_MEMBER_REMOVE'; d: { guild_id: string; user_id: string } }
@@ -138,6 +139,16 @@ function reducer(s: State, a: Action): State {
     }
     case 'GUILD_UPDATE':
       return { ...s, guilds: s.guilds.map((g) => (g.id === a.d.id ? { ...g, ...a.d } : g)) };
+    case 'GUILD_SYNC':
+      // Cargos ou permissões mudaram: troca cargos e canais (os que eu não posso mais ver somem).
+      return {
+        ...s,
+        guilds: s.guilds.map((g) => {
+          if (g.id !== a.d.id) return g;
+          const last = new Map(g.channels.map((c) => [c.id, c.last_message_id]));
+          return { ...g, ...a.d, channels: sortChannels(a.d.channels.map((c) => ({ ...c, last_message_id: c.last_message_id ?? last.get(c.id) }))) };
+        }),
+      };
     case 'GUILD_DELETE':
       return { ...s, guilds: s.guilds.filter((g) => g.id !== a.d.id) };
     case 'GUILD_MEMBER_REMOVE':
@@ -166,19 +177,21 @@ function reducer(s: State, a: Action): State {
         ),
       };
     case 'CHANNEL_UPDATE':
+    case 'CHANNEL_CREATE':
+      // Também serve para canal que acabou de ficar visível para mim (permissões mudaram).
       return {
         ...s,
-        guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, channels: g.channels.map((c) => (c.id === a.d.id ? a.d : c)) } : g)),
+        guilds: s.guilds.map((g) => {
+          if (g.id !== a.d.guild_id) return g;
+          const old = g.channels.find((c) => c.id === a.d.id);
+          const next = { ...old, ...a.d, last_message_id: a.d.last_message_id ?? old?.last_message_id };
+          return { ...g, channels: old ? g.channels.map((c) => (c.id === a.d.id ? next : c)) : sortChannels([...g.channels, next]) };
+        }),
       };
     case 'CHANNEL_DELETE':
       return {
         ...s,
         guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, channels: g.channels.filter((c) => c.id !== a.d.id) } : g)),
-      };
-    case 'CHANNEL_CREATE':
-      return {
-        ...s,
-        guilds: s.guilds.map((g) => (g.id === a.d.guild_id ? { ...g, channels: sortChannels([...g.channels, a.d]) } : g)),
       };
     case 'MESSAGES_LOADED': {
       const cur = s.messages[a.d.channel_id] ?? [];

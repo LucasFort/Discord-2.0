@@ -709,3 +709,42 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .dm-profile .profile-card { border-radius: 0; border: 0; width: auto; }
 .dm-note { margin: 0 16px 16px; font-size: 13px; }
 @media (max-width: 900px) { .friend-row .member-name .muted { display: none; } }
+
+/* ---------- Cargos e permissões ---------- */
+.channel-lock { color: var(--text-muted); flex: none; }
+.composer-locked { margin: 0 16px 8px; padding: 14px 16px; border-radius: 10px; background: var(--bg-3); color: var(--text-muted); font-size: 14px; }
+button.icon.tiny { padding: 2px; border-radius: 4px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.role-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.role-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
+.role-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 6px; background: var(--bg-3); font-size: 12px; color: var(--text); }
+.role-add { width: auto; font: inherit; font-size: 12px; color: var(--text-muted); background: var(--bg-3); border: 1px dashed var(--line); border-radius: 6px; padding: 2px 4px; }
+.roles-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; align-items: start; margin-top: 12px; }
+.role-list { display: flex; flex-direction: column; gap: 2px; }
+.role-list > button.primary { margin-bottom: 8px; }
+.role-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; color: var(--text); }
+.role-item:hover { background: var(--bg-hover); }
+.role-item.active { background: var(--accent-soft); color: var(--text-strong); }
+.role-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-move { display: inline-flex; flex-direction: column; }
+.role-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.role-editor h3 { margin-top: 20px; }
+.perm-group h4 { margin: 16px 0 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.perm-locked { opacity: .5; }
+.color-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.swatch { width: 28px; height: 28px; padding: 0; border-radius: 6px; border: 2px solid transparent; }
+.swatch.active { border-color: var(--text-strong); }
+.swatch.none { background: var(--bg-3); color: var(--text-muted); }
+.color-swatches input[type=color] { width: 36px; height: 30px; padding: 0 2px; border-radius: 6px; cursor: pointer; }
+.channel-perms { margin: 4px 0 14px 28px; padding: 12px 14px; border-radius: 10px; background: var(--bg-1); border: 1px solid var(--line); }
+.channel-perms select, .field select { font: inherit; color: var(--text-strong); background: var(--bg-0); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+.perm-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.perm-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.perm-row > span { display: flex; flex-direction: column; gap: 2px; }
+.perm-row small { font-size: 12px; }
+.tri { display: inline-flex; border-radius: 8px; overflow: hidden; flex: none; }
+.tri button { border-radius: 0; padding: 5px 10px; background: var(--bg-3); color: var(--text-muted); }
+.tri button.on { background: var(--bg-hover); color: var(--text-strong); }
+.tri button.on.allow { background: var(--ok); color: #06231a; }
+.tri button.on.deny { background: var(--danger); color: white; }
+@media (max-width: 720px) { .roles-layout { grid-template-columns: 1fr; } }
