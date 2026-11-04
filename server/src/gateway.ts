@@ -2,7 +2,9 @@ import type { WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { userFromToken } from './auth.js';
 import { handleMusicOp, musicStatesFor, onVoiceChannelLeft } from './music.js';
-import { getChannel, getStatus, guildPayload, guildsOf, isMember, memberIds, type User, type UserStatus } from './db.js';
+import {
+  getChannel, getStatus, guildPayload, guildsOf, isMember, memberIds, relationshipIds, relationshipsOf, type User, type UserStatus,
+} from './db.js';
 
 /**
  * Real-time gateway. One WebSocket per open client tab.
@@ -74,13 +76,20 @@ export function presenceOf(userId: string): Presence {
 export const presencesOf = (ids: Iterable<string>) =>
   [...ids].map((id) => ({ user_id: id, status: presenceOf(id) })).filter((p) => p.status !== 'offline');
 
+/** Quem "conhece" a pessoa: mesmos servidores, conversas diretas, amigos e pedidos pendentes (sem repetir). */
+async function audienceOf(userId: string) {
+  const to = new Set<string>(await relationshipIds(userId));
+  for (const g of await guildsOf(userId)) for (const id of await memberIds(g.id)) to.add(id);
+  return to;
+}
+
 const lastSent = new Map<string, Presence>();
 async function broadcastPresence(user: Pick<User, 'id'>) {
   const status = presenceOf(user.id);
   if (lastSent.get(user.id) === status) return;
   if (status === 'offline') lastSent.delete(user.id);
   else lastSent.set(user.id, status);
-  for (const g of await guildsOf(user.id)) await sendToGuild(g.id, 'PRESENCE_UPDATE', { user_id: user.id, status });
+  for (const id of await audienceOf(user.id)) sendToUser(id, 'PRESENCE_UPDATE', { user_id: user.id, status });
 }
 
 /** A pessoa trocou o status (Disponível, Ausente, Não perturbe, Invisível). */
@@ -92,14 +101,9 @@ export async function setUserStatus(userId: string, status: UserStatus) {
 
 /** Perfil mudou (nome, foto, sobre mim…): avisa a própria pessoa e todo mundo dos servidores dela. */
 export async function broadcastUserUpdate(user: User) {
-  const sent = new Set<string>([user.id]);
-  sendToUser(user.id, 'USER_UPDATE', user);
-  for (const g of await guildsOf(user.id))
-    for (const id of await memberIds(g.id)) {
-      if (sent.has(id)) continue;
-      sent.add(id);
-      sendToUser(id, 'USER_UPDATE', user);
-    }
+  const to = await audienceOf(user.id);
+  to.add(user.id);
+  for (const id of to) sendToUser(id, 'USER_UPDATE', user);
 }
 
 export async function setVoiceState(user: Pick<User, 'id'>, channelId: string | null, flags: VoiceFlags = NO_FLAGS) {
@@ -143,7 +147,8 @@ export function registerGateway(app: FastifyInstance) {
       sockets.set(user.id, set);
 
       const guilds = await Promise.all((await guildsOf(user.id)).map(guildPayload));
-      const visible = new Set(guilds.flatMap((g) => g.members.map((m) => m.id)));
+      const relationships = await relationshipsOf(user.id);
+      const visible = new Set([...guilds.flatMap((g) => g.members.map((m) => m.id)), ...relationships.map((r) => r.user.id)]);
       if (ws.readyState !== 1) return;
       ws.send(
         JSON.stringify({
@@ -152,6 +157,7 @@ export function registerGateway(app: FastifyInstance) {
             user,
             status: chosenStatus.get(user.id) ?? 'online',
             guilds,
+            relationships,
             presences: presencesOf(visible),
             voice_states: [...voiceStates.values()]
               .filter((v) => guilds.some((g) => g.id === v.guildId))

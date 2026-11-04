@@ -6,7 +6,7 @@ import { requireAuth, signSession } from './auth.js';
 import { musicSearchEnabled, searchYouTube } from './music.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser, memberIds,
-  pinnedMessages, searchMessages,
+  pinnedMessages, searchMessages, ownsGuild, relationshipsOf, relationshipType, findDm,
 } from './db.js';
 import {
   broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
@@ -161,6 +161,7 @@ export function registerRoutes(app: FastifyInstance) {
     api.post('/api/guilds/:guildId/invites', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
       if (!(await isMember(guildId, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      if (Number((await getGuild(guildId))?.is_dm)) return reply.code(400).send({ error: 'Conversa direta não tem convite' });
       const opts = z
         .object({ max_uses: z.number().int().positive().nullable().optional(), expires_in_hours: z.number().positive().nullable().optional() })
         .parse(req.body ?? {});
@@ -190,12 +191,102 @@ export function registerRoutes(app: FastifyInstance) {
       return payload;
     });
 
+    // ---------- Amigos ----------
+    api.get('/api/relationships', async (req) => relationshipsOf(req.user.id));
+
+    /**
+     * Manda para cada lado o próprio estado da relação com o outro (ou que ela acabou).
+     * `notice` vai só para quem precisa ser avisado: "request" para quem recebeu o pedido, "accepted" para quem pediu.
+     */
+    const relationshipChanged = async (a: string, b: string, notice?: { to: string; kind: 'request' | 'accepted' }) => {
+      for (const [me, other] of [[a, b], [b, a]]) {
+        const type = await relationshipType(me, other);
+        const user = await getUser(other);
+        if (type && user)
+          sendToUser(me, 'RELATIONSHIP_ADD', { type, user, status: presenceOf(other), notice: notice?.to === me ? notice.kind : undefined });
+        else sendToUser(me, 'RELATIONSHIP_REMOVE', { id: other });
+      }
+    };
+    const makeFriends = (a: string, b: string) =>
+      run("UPDATE relationships SET type = 'friend' WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)", a, b, b, a);
+
+    // Pedido de amizade pelo nome de usuário (como "Adicionar amigo" no Discord).
+    api.post(
+      '/api/relationships',
+      { config: { rateLimit: { max: 20, timeWindow: '1 minute', keyGenerator: (req: { user?: { id: string }; ip: string }) => req.user?.id ?? req.ip } } },
+      async (req, reply) => {
+        const body = z.object({ username: z.string().trim().min(1).max(64).optional(), user_id: z.string().max(40).optional() }).parse(req.body);
+        const other = body.user_id
+          ? ((await get('SELECT id FROM users WHERE id = ?', body.user_id)) as { id: string } | undefined)
+          : body.username
+            ? ((await get('SELECT id FROM users WHERE lower(username) = lower(?)', body.username.replace(/^@/, ''))) as { id: string } | undefined)
+            : undefined;
+        if (!other) return reply.code(404).send({ error: 'Ninguém com esse nome de usuário. Confira se digitou certinho.' });
+        if (other.id === req.user.id) return reply.code(400).send({ error: 'Você não pode adicionar você mesmo' });
+        const mine = await relationshipType(req.user.id, other.id);
+        if (mine === 'friend') return reply.code(400).send({ error: 'Vocês já são amigos' });
+        if (mine === 'outgoing') return reply.code(400).send({ error: 'Pedido já enviado, esperando a resposta' });
+        if (mine === 'incoming') {
+          // A outra pessoa já tinha pedido: vira amizade na hora.
+          await makeFriends(req.user.id, other.id);
+          await relationshipChanged(req.user.id, other.id, { to: other.id, kind: 'accepted' });
+          return { type: 'friend' };
+        }
+        const now = Date.now();
+        await run("INSERT INTO relationships (user_id, other_id, type, created_at) VALUES (?, ?, 'outgoing', ?)", req.user.id, other.id, now);
+        await run("INSERT INTO relationships (user_id, other_id, type, created_at) VALUES (?, ?, 'incoming', ?)", other.id, req.user.id, now);
+        await relationshipChanged(req.user.id, other.id, { to: other.id, kind: 'request' });
+        return { type: 'outgoing' };
+      },
+    );
+
+    // Aceitar um pedido recebido.
+    api.put('/api/relationships/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if ((await relationshipType(req.user.id, id)) !== 'incoming') return reply.code(400).send({ error: 'Nenhum pedido dessa pessoa' });
+      await makeFriends(req.user.id, id);
+      await relationshipChanged(req.user.id, id, { to: id, kind: 'accepted' });
+      return { type: 'friend' };
+    });
+
+    // Recusar, cancelar o pedido ou desfazer a amizade (some para os dois lados).
+    api.delete('/api/relationships/:id', async (req) => {
+      const { id } = req.params as { id: string };
+      await run('DELETE FROM relationships WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)', req.user.id, id, id, req.user.id);
+      await relationshipChanged(req.user.id, id);
+      return { ok: true };
+    });
+
+    // Conversa direta = um "servidor" escondido com as duas pessoas, um canal de texto e um de voz.
+    // Assim mensagens, reações, anexos, digitando, fixar e chamada reaproveitam tudo que os servidores já têm.
+    // Para começar uma conversa nova precisa ser amigo; a que já existe continua aberta.
+    api.post('/api/dms/:userId', async (req, reply) => {
+      const { userId } = req.params as { userId: string };
+      let guildId = await findDm(req.user.id, userId);
+      const created = !guildId;
+      if (!guildId) {
+        if ((await relationshipType(req.user.id, userId)) !== 'friend')
+          return reply.code(403).send({ error: 'Só dá para começar uma conversa direta com amigos' });
+        guildId = newId();
+        const now = Date.now();
+        await run('INSERT INTO guilds (id, name, owner_id, created_at, is_dm) VALUES (?, ?, ?, ?, 1)', guildId, 'Conversa direta', req.user.id, now);
+        await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', guildId, req.user.id, now);
+        await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', guildId, userId, now);
+        const ins = 'INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)';
+        await run(ins, newId(), guildId, 'conversa', 'text', 0);
+        await run(ins, newId(), guildId, 'Chamada', 'voice', 0);
+      }
+      const payload = withPresence(await guildPayload((await getGuild(guildId))!));
+      if (created) for (const id of [req.user.id, userId]) sendToUser(id, 'GUILD_CREATE', payload);
+      return payload;
+    });
+
     // ---------- Canais ----------
     api.post('/api/guilds/:guildId/channels', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
       const guild = await getGuild(guildId);
       // MVP: só o dono cria canais. Na fase 2 isso vira a permissão "Gerenciar canais".
-      if (!guild || guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode criar canais' });
+      if (!ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Só o dono do servidor pode criar canais' });
       const body = z
         .object({ name: z.string().trim().min(1).max(64), type: z.enum(['text', 'voice']) })
         .parse(req.body);
@@ -278,7 +369,7 @@ export function registerRoutes(app: FastifyInstance) {
       if (!msg) return reply.code(404).send({ error: 'Não encontrada' });
       const ch = (await getChannel(msg.channel_id))!;
       const guild = (await getGuild(ch.guild_id))!;
-      if (msg.author.id !== req.user.id && guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Sem acesso' });
+      if (msg.author.id !== req.user.id && !ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Sem acesso' });
       await run('DELETE FROM messages WHERE id = ?', id);
       await sendToGuild(ch.guild_id, 'MESSAGE_DELETE', { id, channel_id: ch.id });
       return { ok: true };
@@ -295,7 +386,8 @@ export function registerRoutes(app: FastifyInstance) {
       const ch = msg && (await getChannel(msg.channel_id));
       if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
       const guild = (await getGuild(ch.guild_id))!;
-      if (guild.owner_id !== req.user.id && msg.author.id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor ou quem escreveu pode fixar' });
+      // Na conversa direta as duas pessoas podem fixar qualquer mensagem.
+      if (!Number(guild.is_dm) && !ownsGuild(guild, req.user.id) && msg.author.id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor ou quem escreveu pode fixar' });
       const { pinned } = z.object({ pinned: z.boolean() }).parse(req.body);
       await run('UPDATE messages SET pinned = ? WHERE id = ?', pinned ? 1 : 0, id);
       const updated = (await getMessage(id))!;
@@ -411,7 +503,7 @@ export function registerRoutes(app: FastifyInstance) {
     // ---------- Configurações do servidor (só o dono) ----------
     const ownedGuild = async (guildId: string, userId: string) => {
       const g = await getGuild(guildId);
-      return g && g.owner_id === userId ? g : undefined;
+      return ownsGuild(g, userId) ? g : undefined;
     };
 
     api.patch('/api/guilds/:guildId', async (req, reply) => {
@@ -458,6 +550,7 @@ export function registerRoutes(app: FastifyInstance) {
       const userId = rawId === '@me' ? req.user.id : rawId;
       const guild = await getGuild(guildId);
       if (!guild || !(await isMember(guildId, userId))) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
+      if (Number(guild.is_dm)) return reply.code(400).send({ error: 'Não dá para sair de uma conversa direta' });
       if (userId === req.user.id) {
         if (guild.owner_id === userId) return reply.code(400).send({ error: 'O dono não pode sair. Apague o servidor nas configurações dele.' });
       } else if (guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode expulsar' });
@@ -504,7 +597,7 @@ export function registerRoutes(app: FastifyInstance) {
       const body = modBody.safeParse(req.body);
       if (!body.success) return reply.code(400).send({ error: 'Ação inválida' });
       const guild = await getGuild(guildId);
-      if (!guild || guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      if (!ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
       if (!(await isMember(guildId, userId))) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
       const { action, channel_id } = body.data;
       const v = voiceStateOf(userId);

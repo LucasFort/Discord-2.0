@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CornerUpLeft, File as FileIcon, Hash, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
-import { api, fileUrl, type Attachment, type Channel, type Guild, type Message, type User } from './api';
+import { AtSign, CornerUpLeft, File as FileIcon, Hash, Phone, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
+import { api, fileUrl, ownsGuild, type Attachment, type Channel, type Guild, type Message, type User } from './api';
 import { ask } from './ask';
 import { playSound } from './sounds';
 import { getSettings, useSettings } from './settings';
@@ -47,8 +47,17 @@ function jumpTo(id: string) {
 type Pending = { key: string; name: string; type: string; size: number; data: string; preview?: string };
 
 // ---------------------------------------------------------------- Chat
-export function Chat(props: { channel: Channel; guild: Guild; state: State; dispatch: (a: any) => void; gateway: Gateway; onOpenChannel: (id: string) => void }) {
-  const { channel, guild, state, dispatch, gateway, onOpenChannel } = props;
+export function Chat(props: {
+  channel: Channel;
+  guild: Guild;
+  state: State;
+  dispatch: (a: any) => void;
+  gateway: Gateway;
+  onOpenChannel: (id: string) => void;
+  dm?: User; // conversa direta: a outra pessoa (o topo e os textos mostram o nome dela)
+  onCall?: () => void;
+}) {
+  const { channel, guild, state, dispatch, gateway, onOpenChannel, dm, onCall } = props;
   const messages = state.messages[channel.id];
   const me = state.user!;
   const members = guild.members;
@@ -144,17 +153,37 @@ export function Chat(props: { channel: Channel; guild: Guild; state: State; disp
       }}
     >
       <header className="topbar">
-        <span className="hash"><Hash size={20} /></span> {channel.name}
-        {channel.topic && <span className="topic" title={channel.topic}>{channel.topic}</span>}
+        {dm ? (
+          <>
+            <span className="hash"><AtSign size={20} /></span>
+            <span className="dm-title" onClick={(e) => openProfile(dm, e)}>{dm.display_name}</span>
+            {dm.custom_status && <span className="topic" title={dm.custom_status}>{dm.custom_status}</span>}
+          </>
+        ) : (
+          <>
+            <span className="hash"><Hash size={20} /></span> {channel.name}
+            {channel.topic && <span className="topic" title={channel.topic}>{channel.topic}</span>}
+          </>
+        )}
         <div className="topbar-end">
+          {onCall && <button className="icon small" title={`Ligar para ${dm?.display_name ?? ''}`} onClick={onCall}><Phone size={18} /></button>}
           <button className={`icon small ${panel === 'pins' ? 'on' : ''}`} title="Mensagens fixadas" onClick={() => setPanel((p) => (p === 'pins' ? null : 'pins'))}><Pin size={18} /></button>
-          <SearchBox guild={guild} onResults={() => setPanel('search')} />
+          <SearchBox guild={guild} label={dm ? 'Buscar na conversa' : undefined} onResults={() => setPanel('search')} />
         </div>
       </header>
       <div className="chat-main">
         <div className="chat-column">
           <div className="messages" ref={listRef} onScroll={onScroll}>
-            {!hasMore && <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>}
+            {!hasMore &&
+              (dm ? (
+                <div className="channel-start dm-start">
+                  <Avatar user={dm} size={72} />
+                  <h2>{dm.display_name}</h2>
+                  <p>Este é o começo da sua conversa direta com <strong>@{dm.username}</strong>.</p>
+                </div>
+              ) : (
+                <div className="channel-start"><h2>Bem-vindo a #{channel.name}!</h2><p>Este é o começo do canal.</p></div>
+              ))}
             {messages?.map((m, i) => {
               const prev = messages[i - 1];
               const grouped = !m.reply && prev && prev.author.id === m.author.id && m.created_at - prev.created_at < 5 * 60_000 && m.id !== firstNew;
@@ -167,7 +196,7 @@ export function Chat(props: { channel: Channel; guild: Guild; state: State; disp
                     mine={m.author.id === me.id}
                     me={me}
                     members={members}
-                    canManage={guild.owner_id === me.id}
+                    canManage={ownsGuild(guild, me.id)}
                     onReply={() => (setReplyTo(m), composer.current?.focus())}
                     onJump={jump}
                   />
@@ -178,6 +207,7 @@ export function Chat(props: { channel: Channel; guild: Guild; state: State; disp
           <Composer
             apiRef={composer}
             channel={channel}
+            placeholder={dm ? `Conversar com @${dm.display_name}` : undefined}
             members={members}
             me={me}
             replyTo={replyTo}
@@ -194,7 +224,7 @@ export function Chat(props: { channel: Channel; guild: Guild; state: State; disp
       </div>
       {dragging && (
         <div className="drop-overlay">
-          <div><PlusCircle size={40} /><h3>Enviar para #{channel.name}</h3><p>Até {MAX_FILES} arquivos de 8 MB.</p></div>
+          <div><PlusCircle size={40} /><h3>Enviar para {dm ? dm.display_name : `#${channel.name}`}</h3><p>Até {MAX_FILES} arquivos de 8 MB.</p></div>
         </div>
       )}
     </div>
@@ -213,9 +243,10 @@ async function editMessage(msg: Message) {
 // ---------------------------------------------------------------- Caixa de mensagem
 type ComposerApi = { focus: () => void; addFiles: (files: File[]) => void };
 
-function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast, onCommand }: {
+function Composer({ apiRef, channel, placeholder, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast, onCommand }: {
   apiRef: React.MutableRefObject<ComposerApi | null>;
   channel: Channel;
+  placeholder?: string;
   members: User[];
   me: User;
   replyTo: Message | null;
@@ -458,7 +489,7 @@ function Composer({ apiRef, channel, members, me, replyTo, onCancelReply, onSent
           rows={1}
           value={text}
           maxLength={4000}
-          placeholder={`Conversar em #${channel.name}`}
+          placeholder={placeholder ?? `Conversar em #${channel.name}`}
           onChange={(e) => {
             setText(e.target.value);
             updateMention(e.target.value, e.target.selectionStart);
@@ -762,7 +793,7 @@ function PinsPanel({ channel, members, me, onJump, onClose, pinnedVersion }: { c
 }
 
 let searchHandler: ((q: string) => void) | null = null;
-function SearchBox({ guild, onResults }: { guild: Guild; onResults: () => void }) {
+function SearchBox({ guild, label, onResults }: { guild: Guild; label?: string; onResults: () => void }) {
   const [q, setQ] = useState('');
   return (
     <form
@@ -774,7 +805,7 @@ function SearchBox({ guild, onResults }: { guild: Guild; onResults: () => void }
         setTimeout(() => searchHandler?.(q.trim()));
       }}
     >
-      <input placeholder={`Buscar em ${guild.name}`} value={q} onChange={(e) => setQ(e.target.value)} />
+      <input placeholder={label ?? `Buscar em ${guild.name}`} value={q} onChange={(e) => setQ(e.target.value)} />
       <Search size={14} />
     </form>
   );

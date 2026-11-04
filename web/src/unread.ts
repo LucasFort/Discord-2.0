@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Message, User } from './api';
-import { mentionsMe } from './notify';
+import { isDirect, mentionsMe } from './notify';
 
 /**
  * Canais não lidos e menções (como as bolinhas e o contador vermelho do Discord).
@@ -56,7 +56,7 @@ export function noteMessage(msg: Message, me: User | null) {
   if (!me || msg.author.id === me.id) return markRead(msg.channel_id, msg.id);
   const visible = active === msg.channel_id && document.hasFocus() && !document.hidden;
   if (visible) return markRead(msg.channel_id, msg.id);
-  if (mentionsMe(msg.content, me)) {
+  if (isDirect(msg.channel_id) || mentionsMe(msg.content, me)) {
     data.mentions[msg.channel_id] = (data.mentions[msg.channel_id] ?? 0) + 1;
     save();
   } else listeners.forEach((l) => l());

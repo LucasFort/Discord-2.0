@@ -15,7 +15,15 @@ export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
 export type Presence = 'online' | 'idle' | 'dnd' | 'offline';
 export const STATUS_LABELS: Record<UserStatus, string> = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', invisible: 'Invisível' };
 export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null };
-export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; channels: Channel[]; members: User[] };
+/** is_dm = 1: conversa direta (um "servidor" escondido com duas pessoas, um canal de texto e um de voz). */
+export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; is_dm?: number; channels: Channel[]; members: User[] };
+export const isDm = (g: Pick<Guild, 'is_dm'> | undefined) => !!g && !!Number(g.is_dm ?? 0);
+/** Dono de verdade: conversa direta não tem dono. */
+export const ownsGuild = (g: Pick<Guild, 'is_dm' | 'owner_id'> | undefined, userId: string | undefined) => !!g && !isDm(g) && g.owner_id === userId;
+/** A outra pessoa de uma conversa direta. */
+export const dmOther = (g: Guild, meId: string) => g.members.find((m) => m.id !== meId) ?? g.members[0];
+/** Amizade ou pedido pendente: "outgoing" = eu pedi, "incoming" = me pediram. */
+export type Relationship = { user: User; type: 'friend' | 'outgoing' | 'incoming' };
 export type Message = {
   id: string;
   channel_id: string;

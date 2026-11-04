@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
+CREATE TABLE IF NOT EXISTS relationships (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  other_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('friend', 'outgoing', 'incoming')),
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, other_id)
+);
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -149,6 +156,8 @@ for (const col of PROFILE_COLUMNS) {
 }
 for (const [table, col, type] of [
   ['guilds', 'icon', 'TEXT'],
+  // Conversa direta (DM) = "servidor" escondido com duas pessoas.
+  ['guilds', 'is_dm', 'INTEGER NOT NULL DEFAULT 0'],
   ['channels', 'topic', 'TEXT'],
   ['messages', 'reply_to', 'TEXT'],
   ['messages', 'pinned', 'INTEGER NOT NULL DEFAULT 0'],
@@ -191,7 +200,9 @@ export type User = {
 };
 /** Status escolhido pela pessoa. "invisible" aparece como offline para os outros. */
 export type UserStatus = 'online' | 'idle' | 'dnd' | 'invisible';
-export type Guild = { id: string; name: string; owner_id: string; icon?: string | null };
+export type Guild = { id: string; name: string; owner_id: string; icon?: string | null; is_dm?: number };
+/** Dono de verdade: conversa direta não tem dono (as duas pessoas têm os mesmos poderes). */
+export const ownsGuild = (g: Guild | undefined, userId: string) => !!g && !Number(g.is_dm ?? 0) && g.owner_id === userId;
 export type Channel = { id: string; guild_id: string; name: string; type: 'text' | 'voice'; position: number; topic?: string | null; last_message_id?: string | null };
 const USER_COLS = 'u.id, u.username, u.display_name, u.avatar, u.bio, u.pronouns, u.banner_color, u.custom_status';
 /** Arquivo anexado (o conteúdo fica no banco e é servido em /api/attachments/:id/:nome). */
@@ -221,10 +232,10 @@ export const isMember = async (guildId: string, userId: string) =>
   !!(await get('SELECT 1 AS ok FROM members WHERE guild_id = ? AND user_id = ?', guildId, userId));
 export const getChannel = async (id: string) => (await get('SELECT * FROM channels WHERE id = ?', id)) as Channel | undefined;
 export const getGuild = async (id: string) =>
-  (await get('SELECT id, name, owner_id, icon, created_at FROM guilds WHERE id = ?', id)) as Guild | undefined;
+  (await get('SELECT id, name, owner_id, icon, created_at, is_dm FROM guilds WHERE id = ?', id)) as Guild | undefined;
 export const guildsOf = async (userId: string) =>
   (await all(
-    'SELECT g.id, g.name, g.owner_id, g.icon, g.created_at FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
+    'SELECT g.id, g.name, g.owner_id, g.icon, g.created_at, g.is_dm FROM guilds g JOIN members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY m.joined_at',
     userId,
   )) as Guild[];
 export const channelsOf = async (guildId: string) =>
@@ -318,6 +329,31 @@ export async function listMessages(channelId: string, before: string | undefined
     : await all(`${MESSAGE_SELECT} WHERE m.channel_id = ? ORDER BY m.id DESC LIMIT ?`, channelId, limit);
   return withReactions(rows.map(rowToMessage).reverse());
 }
+
+// ---------- Amigos ----------
+export type RelationshipType = 'friend' | 'outgoing' | 'incoming';
+export type Relationship = { user: User; type: RelationshipType };
+
+/** Amigos e pedidos de amizade (enviados e recebidos) de uma pessoa. */
+export async function relationshipsOf(userId: string): Promise<Relationship[]> {
+  const rows = await all(
+    `SELECT r.type, ${USER_COLS} FROM relationships r JOIN users u ON u.id = r.other_id WHERE r.user_id = ? ORDER BY lower(u.display_name)`,
+    userId,
+  );
+  return rows.map(({ type, ...user }) => ({ type, user: user as User }));
+}
+export const relationshipType = async (userId: string, otherId: string) =>
+  ((await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', userId, otherId)) as { type: RelationshipType } | undefined)?.type;
+/** Todo mundo com quem a pessoa tem amizade ou pedido pendente (recebe presença e mudanças de perfil). */
+export const relationshipIds = async (userId: string) =>
+  (await all('SELECT other_id FROM relationships WHERE user_id = ?', userId)).map((r) => r.other_id as string);
+
+/** Conversa direta já existente entre duas pessoas. */
+export const findDm = async (a: string, b: string) =>
+  ((await get(
+    'SELECT g.id FROM guilds g JOIN members x ON x.guild_id = g.id AND x.user_id = ? JOIN members y ON y.guild_id = g.id AND y.user_id = ? WHERE g.is_dm = 1',
+    a, b,
+  )) as { id: string } | undefined)?.id;
 
 /** Full guild payload sent to clients. */
 export async function guildPayload(g: Guild) {
