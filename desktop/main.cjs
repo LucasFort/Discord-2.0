@@ -11,7 +11,7 @@
  * - atualização automática (baixa a versão nova sozinho e pergunta se pode reiniciar);
  * - ícone na bandeja, abrir com o Windows e fechar para a bandeja (Configurações > Configurações do Windows).
  */
-const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, session, shell } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -94,6 +94,31 @@ function closeSplash() {
   splash = null;
 }
 
+/**
+ * O Render (plano grátis) dorme quando ninguém usa e, ao acordar, mostra uma página própria
+ * ("waking up") em vez do Nexo. Essa página carrega sem erro, então não dá para detectar pela
+ * janela: antes de abrir o site, pergunta ao servidor se ele já está de pé (/api/health responde
+ * {ok:true} em JSON só quando é o nosso servidor). Enquanto isso fica a tela de carregamento.
+ */
+async function waitForServer() {
+  const started = Date.now();
+  for (;;) {
+    try {
+      const res = await net.fetch(`${APP_ORIGIN}/api/health`, { cache: 'no-store' });
+      if (res.ok && (res.headers.get('content-type') || '').includes('json') && (await res.json()).ok) return;
+    } catch {
+      // sem internet ou servidor reiniciando: tenta de novo
+    }
+    const waited = (Date.now() - started) / 1000;
+    if (waited > 2) setSplashStatus(waited > 90 ? 'Ainda acordando… confira sua internet' : 'Servidor acordando… pode levar até 1 minuto');
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+async function loadWhenAwake(url = APP_URL) {
+  await waitForServer();
+  if (win && !win.isDestroyed()) win.loadURL(url);
+}
+
 function createWindow() {
   const hidden = startedHidden && prefs.startMinimized;
   if (!hidden) createSplash();
@@ -109,7 +134,7 @@ function createWindow() {
     show: false, // aparece quando o site carregar (até lá fica a tela de carregamento)
     webPreferences: { preload: path.join(__dirname, 'preload-main.cjs'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
-  win.loadURL(APP_URL);
+  void loadWhenAwake();
   // Só na primeira carga: depois (site atualizado e recarregado) não pode abrir a janela que
   // a pessoa deixou escondida na bandeja.
   win.webContents.once('did-finish-load', () => {
@@ -146,7 +171,7 @@ function createWindow() {
   win.webContents.on('did-fail-load', (_e, code, _desc, url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
     setSplashStatus('Servidor acordando… pode levar até 1 minuto');
-    setTimeout(() => win && win.loadURL(url || APP_URL), 5000);
+    setTimeout(() => void loadWhenAwake(url || APP_URL), 3000);
   });
 }
 
