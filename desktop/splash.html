@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Nexo</title>
+<style>
+html,body{height:100%;margin:0;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-app-region:drag;background:transparent}
+body{border-radius:14px;background:#171b24}
+.splash{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:16px;text-align:center;background:#171b24;color:#d7dbe6;font-family:Inter,system-ui,sans-serif}
+.splash-logo{filter:drop-shadow(0 10px 30px rgba(124,92,255,.35));animation:splash-bob 2.4s ease-in-out infinite}
+.splash-wave{opacity:.25;animation:splash-wave 1.4s ease-in-out infinite}.splash-wave.w2{animation-delay:.25s}
+.splash-dot{transform-origin:50px 50px;animation:splash-dot 1.4s ease-in-out infinite}
+@keyframes splash-wave{0%,100%{opacity:.25}40%{opacity:1}}@keyframes splash-dot{0%,100%{transform:scale(1)}30%{transform:scale(1.25)}}@keyframes splash-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.splash-status{color:#8a92a6;font-size:13px}
+.splash{gap:18px}
+.splash-tip{max-width:240px}
+.splash-tip strong{font-size:11px;letter-spacing:.08em;color:#a78bfa}
+.splash-tip p{margin:6px 0 0;font-size:13px;line-height:1.45;color:#f4f6fb}
+</style>
+</head>
+<body>
+<div class="splash">
+<svg class="splash-logo" width="96" height="96" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="nexo-g0" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cff"/><stop offset="1" stop-color="#5b3fe0"/></linearGradient></defs><rect x="4" y="4" width="92" height="92" rx="24" fill="url(#nexo-g0)"/><circle class="splash-dot" cx="50" cy="50" r="7" fill="#fff"/><g fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"><path class="splash-wave w1" d="M38 38 a17 17 0 0 0 0 24 M62 38 a17 17 0 0 1 0 24"/><path class="splash-wave w2" d="M29 29 a30 30 0 0 0 0 42 M71 29 a30 30 0 0 1 0 42"/></g></svg>
+<div class="splash-tip"><strong>VOCÊ SABIA?</strong><p id="tip"></p></div>
+<small class="splash-status" id="status">Abrindo o Nexo…</small>
+</div>
+<script>
+const TIPS = ["Aperte ↑ na caixa de mensagem para editar a última mensagem que você mandou.", "Arraste um arquivo para o chat (ou cole com Ctrl+V) para mandar na hora.", "Shift+Enter pula uma linha sem enviar a mensagem.", "Clique com o botão direito em alguém na call para mudar o volume só dessa pessoa.", "Escreva @todos para avisar todo mundo do servidor.", "Passe o mouse numa mensagem e clique no alfinete para fixar no canal.", "Em Configurações > Voz, \"Ouvir minha voz\" mostra como os outros te escutam.", "Com fone de ouvido seus amigos não ouvem a própria voz de volta.", "O modo streamer esconde convites e nomes de usuário enquanto você transmite.", "Clique na sua foto lá embaixo para mudar o status para Não perturbe.", "Use ||spoiler|| para esconder um texto até alguém clicar.", "A busca no topo do chat procura mensagens no servidor inteiro."];
+document.getElementById('tip').textContent = TIPS[Math.floor(Math.random() * TIPS.length)];
+// O app troca o texto de baixo (procurando atualização, servidor acordando…).
+window.setStatus = (t) => (document.getElementById('status').textContent = t);
+</script>
+</body>
+</html>

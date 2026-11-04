@@ -37,6 +37,80 @@ function tone(freq: number, start: number, dur: number, volume = 0.12, type: Osc
   osc.stop(t + dur + 0.05);
 }
 
+/**
+ * "Bolha": seno curto com o tom escorregando (como uma gota), ataque macio e um eco leve uma
+ * oitava acima. É a base do estilo clássico, nos moldes dos sons antigos de apps de voz.
+ */
+function bloop(from: number, to: number, start: number, dur: number, volume = 0.22) {
+  volume = Math.max(0.0002, volume * vol);
+  const c = audio();
+  const t = c.currentTime + start;
+  for (const [mult, v] of [[1, volume], [2, volume * 0.18]] as const) {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(from * mult, t);
+    osc.frequency.exponentialRampToValueAtTime(to * mult, t + dur * 0.6);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(v, t + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(c.destination);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  }
+}
+
+/** Estilo clássico: bolhas suaves. Devolve false para os sons que ele não muda. */
+function classic(name: SoundName) {
+  switch (name) {
+    case 'join': // duas bolhas subindo
+      bloop(392, 523.25, 0, 0.16, 0.3);
+      bloop(587.33, 783.99, 0.1, 0.32, 0.3);
+      return true;
+    case 'leave': // duas bolhas descendo
+      bloop(783.99, 587.33, 0, 0.16, 0.28);
+      bloop(523.25, 349.23, 0.1, 0.34, 0.28);
+      return true;
+    case 'disconnect':
+      bloop(659.25, 440, 0, 0.18, 0.24);
+      bloop(392, 261.63, 0.12, 0.38, 0.24);
+      return true;
+    case 'mute': // "toc" descendo
+      bloop(700, 420, 0, 0.11, 0.16);
+      return true;
+    case 'unmute': // "toc" subindo
+      bloop(420, 700, 0, 0.11, 0.16);
+      return true;
+    case 'deafen':
+      bloop(620, 470, 0, 0.09, 0.15);
+      bloop(470, 300, 0.07, 0.14, 0.15);
+      return true;
+    case 'undeafen':
+      bloop(300, 470, 0, 0.09, 0.15);
+      bloop(470, 620, 0.07, 0.14, 0.15);
+      return true;
+    case 'message': // pingo duplo
+      bloop(1046.5, 1318.5, 0, 0.12, 0.1);
+      bloop(1318.5, 1567.98, 0.08, 0.2, 0.09);
+      return true;
+    case 'reaction':
+      bloop(987.77, 1318.5, 0, 0.12, 0.08);
+      return true;
+    case 'stream_start':
+      bloop(440, 587.33, 0, 0.14, 0.2);
+      bloop(587.33, 880, 0.1, 0.14, 0.2);
+      bloop(880, 1174.66, 0.2, 0.3, 0.18);
+      return true;
+    case 'stream_end':
+      bloop(1174.66, 880, 0, 0.14, 0.18);
+      bloop(880, 587.33, 0.1, 0.14, 0.18);
+      bloop(587.33, 440, 0.2, 0.3, 0.18);
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** Três notas em sequência, a última mais longa: o som de alguém entrando ou saindo da call. */
 function chime(notes: number[]) {
   notes.forEach((f, i) => {
@@ -74,6 +148,7 @@ export function playSound(name: SoundName) {
     if (s.soundsOff[name]) return;
     vol = Math.max(0, Math.min(1, s.soundVolume / 100));
     if (vol === 0) return;
+    if (s.soundPack !== 'nexo' && classic(name)) return;
     switch (name) {
       // Entrar e sair: mais altos (cerca de 2,5x) e com três notas, para dar para ouvir mesmo
       // com jogo ou transmissão tocando. O "triangle" por baixo deixa o som mais cheio.

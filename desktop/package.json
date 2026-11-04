@@ -1,7 +1,7 @@
 {
   "name": "nexo-desktop",
   "productName": "Nexo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "App para computador do Nexo: voz, chat e transmissão de tela com os amigos.",
   "author": "Lucas",
   "license": "UNLICENSED",
@@ -32,6 +32,7 @@
       "preload-picker.cjs",
       "preload-main.cjs",
       "picker.html",
+      "splash.html",
       "package.json",
       "build/icon.png"
     ],

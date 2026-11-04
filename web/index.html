@@ -10,7 +10,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Tela de carregamento enquanto o app baixa (o React troca pelo app). -->
+    <style>html,body,#root{height:100%;margin:0;background:#171b24}.splash{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:16px;text-align:center;background:#171b24;color:#d7dbe6;font-family:Inter,system-ui,sans-serif}
+.splash-logo{filter:drop-shadow(0 10px 30px rgba(124,92,255,.35));animation:splash-bob 2.4s ease-in-out infinite}
+.splash-wave{opacity:.25;animation:splash-wave 1.4s ease-in-out infinite}.splash-wave.w2{animation-delay:.25s}
+.splash-dot{transform-origin:50px 50px;animation:splash-dot 1.4s ease-in-out infinite}
+@keyframes splash-wave{0%,100%{opacity:.25}40%{opacity:1}}@keyframes splash-dot{0%,100%{transform:scale(1)}30%{transform:scale(1.25)}}@keyframes splash-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.splash-status{color:#8a92a6;font-size:13px}</style>
+    <div id="root"><div class="splash"><svg class="splash-logo" width="96" height="96" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="nexo-g0" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cff"/><stop offset="1" stop-color="#5b3fe0"/></linearGradient></defs><rect x="4" y="4" width="92" height="92" rx="24" fill="url(#nexo-g0)"/><circle class="splash-dot" cx="50" cy="50" r="7" fill="#fff"/><g fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"><path class="splash-wave w1" d="M38 38 a17 17 0 0 0 0 24 M62 38 a17 17 0 0 1 0 24"/><path class="splash-wave w2" d="M29 29 a30 30 0 0 0 0 42 M71 29 a30 30 0 0 1 0 42"/></g></svg><small class="splash-status">Abrindo o Nexo…</small></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

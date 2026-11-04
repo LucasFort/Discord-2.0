@@ -65,7 +65,38 @@ function createTray() {
   tray.on('click', showWindow);
 }
 
+/** Tela de carregamento (logo animado e uma dica) enquanto o Nexo abre, como no Discord. */
+let splash = null;
+function setSplashStatus(text) {
+  if (splash && !splash.isDestroyed()) splash.webContents.executeJavaScript(`window.setStatus(${JSON.stringify(text)})`).catch(() => {});
+}
+function createSplash() {
+  splash = new BrowserWindow({
+    width: 300,
+    height: 340,
+    frame: false,
+    resizable: false,
+    movable: true,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    show: false,
+    title: 'Nexo',
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: { sandbox: true, contextIsolation: true },
+  });
+  splash.loadFile(path.join(__dirname, 'splash.html'));
+  splash.once('ready-to-show', () => splash && !splash.isDestroyed() && splash.show());
+  splash.on('closed', () => (splash = null));
+}
+function closeSplash() {
+  if (splash && !splash.isDestroyed()) splash.close();
+  splash = null;
+}
+
 function createWindow() {
+  const hidden = startedHidden && prefs.startMinimized;
+  if (!hidden) createSplash();
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -75,10 +106,16 @@ function createWindow() {
     title: 'Nexo',
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
-    show: !(startedHidden && prefs.startMinimized),
+    show: false, // aparece quando o site carregar (até lá fica a tela de carregamento)
     webPreferences: { preload: path.join(__dirname, 'preload-main.cjs'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
   win.loadURL(APP_URL);
+  // Só na primeira carga: depois (site atualizado e recarregado) não pode abrir a janela que
+  // a pessoa deixou escondida na bandeja.
+  win.webContents.once('did-finish-load', () => {
+    if (win && !hidden) win.show();
+    closeSplash();
+  });
   // Fechar para a bandeja: o X só esconde (a call continua). Sair de vez pelo ícone perto do relógio.
   win.on('close', (e) => {
     if (!quitting && prefs.minimizeToTray && tray) {
@@ -107,7 +144,9 @@ function createWindow() {
 
   // Site fora do ar (Render acordando): tenta de novo em 5 s em vez de ficar numa tela branca.
   win.webContents.on('did-fail-load', (_e, code, _desc, url, isMainFrame) => {
-    if (isMainFrame && code !== -3) setTimeout(() => win && win.loadURL(url || APP_URL), 5000);
+    if (!isMainFrame || code === -3) return;
+    setSplashStatus('Servidor acordando… pode levar até 1 minuto');
+    setTimeout(() => win && win.loadURL(url || APP_URL), 5000);
   });
 }
 
@@ -249,6 +288,9 @@ function setupAutoUpdate() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on('error', (err) => console.error('Atualização falhou', err?.message || err));
+  autoUpdater.on('checking-for-update', () => setSplashStatus('Procurando atualizações…'));
+  autoUpdater.on('update-available', () => setSplashStatus('Baixando atualização…'));
+  autoUpdater.on('update-not-available', () => setSplashStatus('Abrindo o Nexo…'));
   let asked = false;
   autoUpdater.on('update-downloaded', async (info) => {
     if (asked) return;

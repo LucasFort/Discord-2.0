@@ -16,6 +16,7 @@ import { updateSettings, useSettings, getSettings, type Settings } from './setti
 import { myPresence, useStore, type Gateway, type State, type VoiceFlags } from './store';
 import { Avatar, GuildIcon, initials, openProfile, ProfileCard, setProfileOpener, StatusMenu, type ProfileOpen } from './profile';
 import { Chat } from './chat';
+import { Splash } from './splash';
 import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { ServerSettings } from './ServerSettings';
 import { mentionsMe } from './notify';
@@ -182,17 +183,14 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
   if (!state.ready || !state.user)
     return (
-      <div className="loading">
-        <div>
-          <p>{failures >= 3 ? 'Não foi possível conectar ao servidor. Tentando de novo…' : 'Conectando…'}</p>
-          {failures >= 3 && (
-            <>
-              <p className="muted">Se o site acabou de acordar, pode levar até 1 minuto.</p>
-              <button onClick={onLogout}>Sair e entrar de novo</button>
-            </>
-          )}
-        </div>
-      </div>
+      <Splash status={failures >= 3 ? 'Não foi possível conectar ao servidor. Tentando de novo…' : 'Conectando…'}>
+        {failures >= 3 && (
+          <>
+            <p className="muted">Se o servidor acabou de acordar, pode levar até 1 minuto.</p>
+            <button onClick={onLogout}>Sair e entrar de novo</button>
+          </>
+        )}
+      </Splash>
     );
 
   const openChannel = (c: Channel) => {
