@@ -17,24 +17,9 @@ export const TIPS = [
 ];
 export const randomTip = () => TIPS[Math.floor(Math.random() * TIPS.length)];
 
-/** Logo do Nexo com as ondas acendendo em sequência (o "carregando"). */
+/** Ícone do Nexo (o N com a órbita) balançando de leve enquanto carrega. */
 export function SplashLogo({ size = 96 }: { size?: number }) {
-  return (
-    <svg className="splash-logo" width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
-      <rect x="4" y="4" width="92" height="92" rx="24" fill="url(#nexo-g)" />
-      <defs>
-        <linearGradient id="nexo-g" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#8b5cff" />
-          <stop offset="1" stopColor="#5b3fe0" />
-        </linearGradient>
-      </defs>
-      <circle className="splash-dot" cx="50" cy="50" r="7" fill="#fff" />
-      <g fill="none" stroke="#fff" strokeWidth="6" strokeLinecap="round">
-        <path className="splash-wave w1" d="M38 38 a17 17 0 0 0 0 24 M62 38 a17 17 0 0 1 0 24" />
-        <path className="splash-wave w2" d="M29 29 a30 30 0 0 0 0 42 M71 29 a30 30 0 0 1 0 42" />
-      </g>
-    </svg>
-  );
+  return <img className="splash-logo" src="/icon-192.png" width={size} height={size} alt="" />;
 }
 
 /** Tela de carregamento do Nexo: logo animado, uma dica e o que está acontecendo agora. */
