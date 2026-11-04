@@ -658,3 +658,4 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .music-result:hover .music-result-add { color: var(--accent-2); }
 .music-back { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 500; }
 .music-empty.error { color: #ff8a96; }
+.mention-popup .cmd-desc { margin-left: auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

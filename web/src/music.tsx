@@ -349,3 +349,42 @@ export function MusicPanel({ music, gateway, guild, onClose }: {
     </aside>
   );
 }
+
+// ---------- Comandos no chat (/play, /pause, /skip, /stop) ----------
+export const MUSIC_COMMANDS = [
+  { name: 'play', args: '<nome ou link>', desc: 'Toca uma música do YouTube na sua call (ou põe na fila)' },
+  { name: 'pause', args: '', desc: 'Pausa a música para todos da call' },
+  { name: 'resume', args: '', desc: 'Volta a tocar a música pausada' },
+  { name: 'skip', args: '', desc: 'Pula para a próxima música da fila' },
+  { name: 'stop', args: '', desc: 'Para a música e limpa a fila' },
+] as const;
+const ALIASES: Record<string, (typeof MUSIC_COMMANDS)[number]['name']> = {
+  play: 'play', p: 'play', tocar: 'play',
+  pause: 'pause', pausar: 'pause',
+  resume: 'resume', continuar: 'resume',
+  skip: 'skip', s: 'skip', pular: 'skip', next: 'skip',
+  stop: 'stop', parar: 'stop',
+};
+
+/**
+ * Trata "/play despacito" e afins digitados no chat. Devolve true se era um comando de música
+ * (aí a mensagem não vai para o canal). Funciona de qualquer canal de texto, desde que a pessoa esteja numa call.
+ */
+export function runMusicCommand(raw: string, gateway: Gateway, inVoice: boolean): boolean {
+  const m = /^\/(\S+)\s*([\s\S]*)$/.exec(raw.trim());
+  const cmd = m && ALIASES[m[1].toLowerCase()];
+  if (!m || !cmd) return false;
+  if (!inVoice) {
+    toast('Entre num canal de voz para usar os comandos de música.', 'error');
+    return true;
+  }
+  const arg = m[2].trim();
+  if (cmd === 'play') {
+    if (!arg) toast('Use /play seguido do nome da música ou de um link do YouTube.', 'error');
+    else {
+      gateway.send({ op: 'music', action: 'add', url: arg });
+      toast(`Procurando "${arg.length > 60 ? `${arg.slice(0, 60)}…` : arg}"…`);
+    }
+  } else gateway.send({ op: 'music', action: cmd });
+  return true;
+}
