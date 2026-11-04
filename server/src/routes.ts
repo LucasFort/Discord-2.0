@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import { requireAuth, signSession } from './auth.js';
+import { musicSearchEnabled, searchYouTube } from './music.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser, memberIds,
   pinnedMessages, searchMessages,
@@ -91,6 +92,7 @@ export function registerRoutes(app: FastifyInstance) {
       apiKeyStartsWith: LIVEKIT_API_KEY.slice(0, 3), // chaves do LiveKit começam com "API"
       apiKeyLength: LIVEKIT_API_KEY.length,
       apiSecretLength: LIVEKIT_API_SECRET.length,
+      musicSearch: musicSearchEnabled(), // busca de música pelo nome (YOUTUBE_API_KEY)
     };
   });
 
@@ -307,6 +309,16 @@ export function registerRoutes(app: FastifyInstance) {
       if (!ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
       return pinnedMessages(channelId);
     });
+
+    // Busca de música pelo nome ("Ouvir junto"). Limite por pessoa para não gastar a cota do YouTube.
+    api.get(
+      '/api/music/search',
+      { config: { rateLimit: { max: 15, timeWindow: '1 minute', keyGenerator: (req: { user?: { id: string }; ip: string }) => req.user?.id ?? req.ip } } },
+      async (req) => {
+        const { q } = z.object({ q: z.string().trim().min(1).max(100) }).parse(req.query);
+        return { results: await searchYouTube(q) };
+      },
+    );
 
     api.get('/api/guilds/:guildId/search', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
