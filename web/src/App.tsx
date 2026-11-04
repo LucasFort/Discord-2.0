@@ -22,6 +22,7 @@ import { Chat } from './chat';
 import { Splash } from './splash';
 import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { ServerSettings } from './ServerSettings';
+import { CreateServerModal, InviteModal } from './servers';
 import { mentionsMe } from './notify';
 import type { Presence } from './api';
 import {
@@ -194,14 +195,26 @@ function Main({ onLogout }: { onLogout: () => void }) {
   }, [state.guilds, voice.channelId]);
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
 
+  // Criar servidor / entrar com convite (tela própria em servers.tsx).
+  const [createOpen, setCreateOpen] = useState<null | { start: 'pick' | 'join'; invite?: string }>(null);
   useEffect(() => {
-    // Abre o convite de um link /convite/CODIGO
+    // Abriu um link /convite/CODIGO: mostra a prévia do servidor antes de entrar.
     const m = location.pathname.match(/^\/convite\/(\w+)/);
     if (m && state.ready) {
       history.replaceState(null, '', '/');
-      api<Guild>('POST', `/invites/${m[1]}`).then((g) => setGuildId(g.id)).catch((e) => alert(e.message));
+      setCreateOpen({ start: 'join', invite: m[1] });
     }
   }, [state.ready]);
+  // Clicou "Entrar"/"Abrir" num cartão de convite do chat.
+  useEffect(() => {
+    const open = (e: Event) => {
+      setGuildId((e as CustomEvent<string>).detail);
+      setChannelId(null);
+      setView('text');
+    };
+    window.addEventListener('nexo:open-guild', open);
+    return () => window.removeEventListener('nexo:open-guild', open);
+  }, []);
 
   if (!state.ready || !state.user)
     return (
@@ -227,15 +240,8 @@ function Main({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  const createGuild = async () => {
-    const name = await ask('Nome do servidor', { okText: 'Criar' });
-    if (name) setGuildId((await api<Guild>('POST', '/guilds', { name })).id);
-  };
-  const joinGuild = async () => {
-    const input = await ask('Cole o link ou o código do convite', { okText: 'Entrar' });
-    const code = input?.trim().split('/').pop();
-    if (code) setGuildId((await api<Guild>('POST', `/invites/${code}`).catch((e) => (alert(e.message), null)))?.id ?? guildId);
-  };
+  const createGuild = () => setCreateOpen({ start: 'pick' });
+  const joinGuild = () => setCreateOpen({ start: 'join' });
 
   const leaveGuild = async (g: Guild) => {
     if (!confirm(`Sair do servidor ${g.name}? Você só volta com um convite novo.`)) return;
@@ -436,6 +442,15 @@ function Main({ onLogout }: { onLogout: () => void }) {
           onFullscreen={() => {}}
         />
       )}
+      {createOpen && (
+        <CreateServerModal
+          me={state.user}
+          start={createOpen.start}
+          initialInvite={createOpen.invite}
+          onClose={() => setCreateOpen(null)}
+          onDone={(id) => (setCreateOpen(null), setGuildId(id), setChannelId(null), setView('text'))}
+        />
+      )}
       <Toasts />
       <UpdateWatcher voiceChannelId={voice.channelId} sharing={voice.sharing} />
       <AskHost />
@@ -518,14 +533,8 @@ function ChannelList(props: {
     const name = await ask(type === 'text' ? 'Nome do canal de texto' : 'Nome do canal de voz', { okText: 'Criar' });
     if (name) await api('POST', `/guilds/${guild.id}/channels`, { name, type }).catch((e) => alert(e.message));
   };
-  const invite = async () => {
-    const { code } = await api<{ code: string }>('POST', `/guilds/${guild.id}/invites`, {});
-    const link = `${location.origin}/convite/${code}`;
-    await navigator.clipboard?.writeText(link).catch(() => {});
-    // Modo streamer: copia sem mostrar o link na tela (quem assiste não consegue entrar).
-    if (streamer && getSettings().streamerHideInvites) return void toast('Convite copiado. O link fica escondido no modo streamer.');
-    await ask('Convite copiado (válido por 7 dias)', { value: link, readOnly: true });
-  };
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const invite = () => setInviteOpen(true);
   const section = (type: 'text' | 'voice', title: string) => (
     <>
       <div className="section">
@@ -605,6 +614,7 @@ function ChannelList(props: {
       )}
       {section('text', 'Canais de texto')}
       {section('voice', 'Canais de voz')}
+      {inviteOpen && <InviteModal guild={guild} state={state} presenceOf={props.presenceOf ?? (() => 'offline')} onClose={() => setInviteOpen(false)} />}
     </div>
   );
 }

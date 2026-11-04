@@ -11,6 +11,7 @@ import {
 import {
   broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToChannel, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
 } from './gateway.js';
+import { TEMPLATES, TEMPLATE_IDS } from './templates.js';
 import { ALL_PERMS, CHANNEL_PERMS, channelWithOverwrites, guildPayload, P, permContext, type PermContext } from './permissions.js';
 
 /** Reação: um emoji (qualquer um, como no Discord). Recusa texto comum para ninguém "reagir" com palavras. */
@@ -335,21 +336,59 @@ export function registerRoutes(app: FastifyInstance) {
 
     // ---------- Servidores ----------
     api.post('/api/guilds', async (req) => {
-      const { name } = z.object({ name: z.string().trim().min(1).max(64) }).parse(req.body);
+      const body = z
+        .object({ name: z.string().trim().min(1).max(64), icon: imageUrl.nullable().optional(), template: z.enum(TEMPLATE_IDS).default('blank') })
+        .parse(req.body);
       const id = newId();
       const now = Date.now();
-      await run('INSERT INTO guilds (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)', id, name, req.user.id, now);
+      await run('INSERT INTO guilds (id, name, owner_id, created_at, icon) VALUES (?, ?, ?, ?, ?)', id, body.name, req.user.id, now, body.icon ?? null);
       await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', id, req.user.id, now);
       await run(
         "INSERT INTO roles (id, guild_id, name, color, permissions, position, hoist, created_at) VALUES (?, ?, '@everyone', NULL, ?, 0, 0, ?)",
         id, id, DEFAULT_EVERYONE_PERMS, now,
       );
-      const ins = 'INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)';
-      await run(ins, newId(), id, 'geral', 'text', 0);
-      await run(ins, newId(), id, 'Geral', 'voice', 0);
+      // Modelo escolhido na tela de criar servidor: canais (com tópico), cargos e canais só de leitura.
+      const t = TEMPLATES[body.template];
+      const roleIds: Record<string, string> = {};
+      for (const [i, r] of t.roles.entries()) {
+        roleIds[r.name] = newId();
+        await run(
+          'INSERT INTO roles (id, guild_id, name, color, permissions, position, hoist, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          roleIds[r.name], id, r.name, r.color, r.permissions, t.roles.length - i, r.hoist ? 1 : 0, now,
+        );
+      }
+      const pos = { text: 0, voice: 0 };
+      for (const c of t.channels) {
+        const chId = newId();
+        await run('INSERT INTO channels (id, guild_id, name, type, position, topic) VALUES (?, ?, ?, ?, ?, ?)', chId, id, c.name, c.type, pos[c.type]++, c.topic ?? null);
+        // Canal de avisos: só quem administra escreve (o @everyone perde "Enviar mensagens" ali).
+        if (c.readOnly) await run('INSERT INTO channel_overwrites (channel_id, target_id, allow, deny) VALUES (?, ?, 0, ?)', chId, id, P.SEND_MESSAGES);
+      }
       const payload = await guildPayload((await getGuild(id))!, req.user.id);
       sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
       return payload;
+    });
+
+    // Prévia de um convite (cartão no chat e tela "Entrar num servidor"): nome, ícone e quanta gente tem.
+    api.get('/api/invites/:code', async (req, reply) => {
+      const { code } = req.params as { code: string };
+      const inv = (await get('SELECT * FROM invites WHERE code = ?', code)) as
+        | { guild_id: string; creator_id: string; uses: number; max_uses: number | null; expires_at: number | null }
+        | undefined;
+      const guild = inv && (await getGuild(inv.guild_id));
+      if (!inv || !guild || (inv.expires_at && inv.expires_at < Date.now()) || (inv.max_uses && inv.uses >= inv.max_uses))
+        return reply.code(404).send({ error: 'Convite inválido ou expirado' });
+      const ids = await memberIds(guild.id);
+      const inviter = await getUser(inv.creator_id);
+      return {
+        code,
+        guild: { id: guild.id, name: guild.name, icon: guild.icon ?? null },
+        member_count: ids.length,
+        online_count: presencesOf(ids).length,
+        inviter: inviter ? { id: inviter.id, display_name: inviter.display_name, avatar: inviter.avatar ?? null } : null,
+        expires_at: inv.expires_at,
+        joined: ids.includes(req.user.id),
+      };
     });
 
     api.post('/api/guilds/:guildId/invites', async (req, reply) => {
