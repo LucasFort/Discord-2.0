@@ -31,7 +31,7 @@ export type Settings = {
   attenuateMe: boolean; // abaixa quando você fala
   soundVolume: number; // 0–100 (%) dos sons do app
   soundsOff: Partial<Record<string, boolean>>; // sons desligados um por um
-  soundPack: 'classic' | 'nexo'; // estilo dos sons: clássico (bolhas suaves, estilo Discord antigo) ou Nexo (notas)
+  soundPack: 'signature' | 'classic' | 'nexo'; // estilo dos sons: assinatura do Nexo, clássico (bolhas) ou notas simples
   // Transmissão: o que vem marcado quando você abre "Transmitir tela" (salva a última escolha).
   streamResolution: '720' | '1080' | '1440' | 'native';
   streamFps: 15 | 30 | 60;
@@ -100,7 +100,7 @@ const DEFAULTS: Settings = {
   attenuateMe: false,
   soundVolume: 100,
   soundsOff: {},
-  soundPack: 'classic',
+  soundPack: 'signature',
   streamResolution: 'native',
   streamFps: 60,
   streamOptimize: 'motion',
@@ -141,7 +141,7 @@ const KEY = 'nexo.settings';
  * trocado para quem já tinha o Nexo (a pessoa ainda pode escolher de novo depois).
  * 2: supressão "Máxima" (IA duas vezes) deixava um barulho estranho/robótico na voz -> volta para "Forte".
  */
-const VERSION = 3;
+const VERSION = 4;
 
 function load(): Settings {
   try {
@@ -149,6 +149,8 @@ function load(): Settings {
     if ((saved._v ?? 1) < 2) saved.maxNoiseSuppression = false;
     // v3: volta a proteção contra eco para todo mundo (retorno na call vem de quem está sem ela).
     if ((saved._v ?? 1) < 3) Object.assign(saved, { echoCancellation: true, echoGate: true });
+    // v4: sons novos com a assinatura do Nexo para todo mundo (dá para voltar nas configurações).
+    if ((saved._v ?? 1) < 4) saved.soundPack = 'signature';
     saved._v = VERSION;
     return { ...DEFAULTS, ...saved };
   } catch {
