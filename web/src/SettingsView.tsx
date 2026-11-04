@@ -526,12 +526,13 @@ function NotifySettings() {
             <select
               value={s.soundPack}
               onChange={(e) => {
-                updateSettings({ soundPack: e.target.value as 'classic' | 'nexo' });
+                updateSettings({ soundPack: e.target.value as 'signature' | 'classic' | 'nexo' });
                 setTimeout(() => playSound('join'), 0);
               }}
             >
+              <option value="signature">Nexo (assinatura)</option>
               <option value="classic">Clássico (bolhas suaves)</option>
-              <option value="nexo">Nexo (notas)</option>
+              <option value="nexo">Simples (notas)</option>
             </select>
           </label>
           <h3>Sons</h3>
