@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AtSign, CornerUpLeft, File as FileIcon, Hash, Phone, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
 import { can, nameColor, P } from './permissions';
+import { InviteEmbed } from './servers';
+
+/** Códigos de convite do Nexo citados numa mensagem (no máximo 3 cartões). */
+const inviteCodes = (text: string) => [...new Set([...text.matchAll(/https?:\/\/[^\s/]+\/convite\/([A-Za-z0-9]{4,32})/g)].map((m) => m[1]))].slice(0, 3);
 import { api, fileUrl, type Attachment, type Channel, type Guild, type Message, type User } from './api';
 import { ask } from './ask';
 import { playSound } from './sounds';
@@ -676,6 +680,7 @@ export function MessageRow({ msg, grouped, mine, me, members, canManage, color, 
               {msg.edited_at && <small className="edited"> (editado)</small>}
             </div>
           )}
+          {!preview && inviteCodes(msg.content).map((c) => <InviteEmbed key={c} code={c} />)}
           {!!msg.attachments?.length && (
             <div className="attachments">
               {msg.attachments.map((a) => <AttachmentView key={a.id} a={a} />)}
