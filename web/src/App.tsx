@@ -74,7 +74,7 @@ function Auth({ onDone }: { onDone: () => void }) {
   return (
     <div className="auth">
       <form onSubmit={submit} className="auth-card">
-        <div className="logo"><Radio size={28} /></div>
+        <img className="auth-logo" src="/nexo-logo.webp" width={168} height={168} alt={APP_NAME} />
         <h1>{mode === 'login' ? `Bem-vindo de volta ao ${APP_NAME}` : 'Criar uma conta'}</h1>
         <label>
           Usuário
@@ -282,7 +282,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
     <div className="app">
       <nav className="guilds">
         <button className={`guild home ${home ? 'active' : ''}`} title="Amigos e mensagens diretas" onClick={() => setGuildId(HOME)}>
-          <Radio size={22} />
+          <img className="home-icon" src="/icon-192.png" alt="" />
           {badge > 0 && <span className="count-badge">{badge > 99 ? '99+' : badge}</span>}
         </button>
         {unreadDms.map((g) => {
