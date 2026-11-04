@@ -75,6 +75,33 @@ CREATE TABLE IF NOT EXISTS relationships (
   created_at BIGINT NOT NULL,
   PRIMARY KEY (user_id, other_id)
 );
+-- Cargos: o @everyone tem o mesmo id do servidor. Posição maior = cargo mais alto.
+CREATE TABLE IF NOT EXISTS roles (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT,
+  permissions BIGINT NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0,
+  hoist INTEGER NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS roles_guild ON roles(guild_id);
+CREATE TABLE IF NOT EXISTS member_roles (
+  guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS member_roles_guild ON member_roles(guild_id);
+-- Permissões por canal: permitir/negar bits para um cargo só naquele canal.
+CREATE TABLE IF NOT EXISTS channel_overwrites (
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  allow BIGINT NOT NULL DEFAULT 0,
+  deny BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel_id, target_id)
+);
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -168,6 +195,15 @@ for (const [table, col, type] of [
     /* já existe */
   }
 }
+// Servidores criados antes dos cargos ganham o @everyone com as permissões de sempre
+// (ver, falar, mandar arquivos, entrar na voz, transmitir e convidar). Ver DEFAULT_PERMS em permissions.ts.
+export const DEFAULT_EVERYONE_PERMS = 495; // = DEFAULT_PERMS (permissions.ts importa este arquivo, então o número fica escrito aqui)
+await driver.all(
+  `INSERT INTO roles (id, guild_id, name, color, permissions, position, hoist, created_at)
+   SELECT g.id, g.id, '@everyone', NULL, ?, 0, 0, g.created_at FROM guilds g
+   WHERE g.is_dm = 0 AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.id = g.id)`,
+  [DEFAULT_EVERYONE_PERMS],
+);
 if (process.env.NODE_ENV === 'production' && driver.kind === 'sqlite')
   console.warn('[banco] Sem DATABASE_URL: usando SQLite em arquivo. No Render grátis os dados somem a cada reinício.');
 
@@ -250,12 +286,13 @@ export async function pinnedMessages(channelId: string): Promise<Message[]> {
   return withReactions(rows.map(rowToMessage));
 }
 
-/** Busca simples por texto nos canais de texto de um servidor (mais nova primeiro). */
-export async function searchMessages(guildId: string, q: string, limit = 25): Promise<Message[]> {
+/** Busca simples por texto em alguns canais (os que a pessoa pode ver), mais nova primeiro. */
+export async function searchMessages(channelIds: string[], q: string, limit = 25): Promise<Message[]> {
+  if (!channelIds.length) return [];
   const like = `%${q.toLowerCase().replace(/[\\%_]/g, (c) => '\\' + c)}%`;
   const rows = await all(
-    `${MESSAGE_SELECT} JOIN channels c ON c.id = m.channel_id WHERE c.guild_id = ? AND lower(m.content) LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT ?`,
-    guildId, like, limit,
+    `${MESSAGE_SELECT} WHERE m.channel_id IN (${channelIds.map(() => '?').join(', ')}) AND lower(m.content) LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT ?`,
+    ...channelIds, like, limit,
   );
   return withReactions(rows.map(rowToMessage));
 }
@@ -354,9 +391,3 @@ export const findDm = async (a: string, b: string) =>
     'SELECT g.id FROM guilds g JOIN members x ON x.guild_id = g.id AND x.user_id = ? JOIN members y ON y.guild_id = g.id AND y.user_id = ? WHERE g.is_dm = 1',
     a, b,
   )) as { id: string } | undefined)?.id;
-
-/** Full guild payload sent to clients. */
-export async function guildPayload(g: Guild) {
-  const [channels, members] = await Promise.all([channelsOf(g.id), membersOf(g.id)]);
-  return { ...g, channels, members };
-}

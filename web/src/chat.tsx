@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AtSign, CornerUpLeft, File as FileIcon, Hash, Phone, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
-import { api, fileUrl, ownsGuild, type Attachment, type Channel, type Guild, type Message, type User } from './api';
+import { can, nameColor, P } from './permissions';
+import { api, fileUrl, type Attachment, type Channel, type Guild, type Message, type User } from './api';
 import { ask } from './ask';
 import { playSound } from './sounds';
 import { getSettings, useSettings } from './settings';
@@ -61,6 +62,8 @@ export function Chat(props: {
   const messages = state.messages[channel.id];
   const me = state.user!;
   const members = guild.members;
+  const canSend = can(guild, me.id, P.SEND_MESSAGES, channel.id);
+  const canAttach = canSend && can(guild, me.id, P.ATTACH_FILES, channel.id);
   const [hasMore, setHasMore] = useState(true);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [panel, setPanel] = useState<null | 'pins' | 'search'>(null);
@@ -141,7 +144,7 @@ export function Chat(props: {
     <div
       className="chat"
       onDragOver={(e) => {
-        if (![...e.dataTransfer.types].includes('Files')) return;
+        if (!canAttach || ![...e.dataTransfer.types].includes('Files')) return;
         e.preventDefault();
         setDragging(true);
       }}
@@ -196,7 +199,8 @@ export function Chat(props: {
                     mine={m.author.id === me.id}
                     me={me}
                     members={members}
-                    canManage={ownsGuild(guild, me.id)}
+                    canManage={can(guild, me.id, P.MANAGE_MESSAGES, channel.id)}
+                    color={nameColor(guild, m.author.id)}
                     onReply={() => (setReplyTo(m), composer.current?.focus())}
                     onJump={jump}
                   />
@@ -204,9 +208,12 @@ export function Chat(props: {
               );
             })}
           </div>
-          <Composer
+          {!canSend ? (
+            <div className="composer-locked">Você não tem permissão para mandar mensagens neste canal.</div>
+          ) : <Composer
             apiRef={composer}
             channel={channel}
+            canAttach={canAttach}
             placeholder={dm ? `Conversar com @${dm.display_name}` : undefined}
             members={members}
             me={me}
@@ -216,7 +223,7 @@ export function Chat(props: {
             onTyping={() => gateway.send({ op: 'typing', channel_id: channel.id })}
             onEditLast={editLast}
             onCommand={(raw) => runMusicCommand(raw, gateway, !!state.voice[me.id])}
-          />
+          />}
           <div className="typing">{typingNames.length > 0 && `${typingNames.join(', ')} ${typingNames.length > 1 ? 'estão' : 'está'} digitando…`}</div>
         </div>
         {panel === 'pins' && <PinsPanel channel={channel} members={members} me={me} onJump={jump} onClose={() => setPanel(null)} pinnedVersion={messages?.filter((m) => m.pinned).map((m) => m.id).join()} />}
@@ -243,9 +250,10 @@ async function editMessage(msg: Message) {
 // ---------------------------------------------------------------- Caixa de mensagem
 type ComposerApi = { focus: () => void; addFiles: (files: File[]) => void };
 
-function Composer({ apiRef, channel, placeholder, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast, onCommand }: {
+function Composer({ apiRef, channel, canAttach, placeholder, members, me, replyTo, onCancelReply, onSent, onTyping, onEditLast, onCommand }: {
   apiRef: React.MutableRefObject<ComposerApi | null>;
   channel: Channel;
+  canAttach: boolean;
   placeholder?: string;
   members: User[];
   me: User;
@@ -289,6 +297,7 @@ function Composer({ apiRef, channel, placeholder, members, me, replyTo, onCancel
   }, [text]);
 
   const addFiles = async (list: File[]) => {
+    if (!canAttach) return toast('Você não tem permissão para mandar arquivos neste canal.');
     const room = MAX_FILES - files.length;
     if (list.length > room) toast(`Dá para mandar até ${MAX_FILES} arquivos por mensagem.`);
     const ok: Pending[] = [];
@@ -473,7 +482,7 @@ function Composer({ apiRef, channel, placeholder, members, me, replyTo, onCancel
         </div>
       )}
       <div className={`composer-box ${replyTo ? 'replying' : ''}`}>
-        <button className="icon composer-btn" title="Mandar arquivo" onClick={() => fileInput.current?.click()}><PlusCircle size={22} /></button>
+        {canAttach && <button className="icon composer-btn" title="Mandar arquivo" onClick={() => fileInput.current?.click()}><PlusCircle size={22} /></button>}
         <input
           ref={fileInput}
           type="file"
@@ -589,13 +598,14 @@ const EMOJI_NAMES: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------- Mensagem
-export function MessageRow({ msg, grouped, mine, me, members, canManage, onReply, onJump, preview }: {
+export function MessageRow({ msg, grouped, mine, me, members, canManage, color, onReply, onJump, preview }: {
   msg: Message;
   grouped: boolean;
   mine: boolean;
   me: User;
   members: User[];
   canManage?: boolean;
+  color?: string; // cor do cargo mais alto do autor
   onReply?: () => void;
   onJump?: (m: Message) => void;
   preview?: boolean; // dentro dos fixados/busca: sem ações
@@ -655,7 +665,7 @@ export function MessageRow({ msg, grouped, mine, me, members, canManage, onReply
           )}
           {!grouped && !compact && (
             <div className="message-head">
-              <strong className="author" onClick={(e) => openProfile(author, e)}>{author.display_name}</strong>
+              <strong className="author" style={{ color }} onClick={(e) => openProfile(author, e)}>{author.display_name}</strong>
               <small>{time.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', hour12: !s.use24h })}</small>
               {msg.pinned && !preview && <Pin size={12} className="pinned-mark" aria-label="Fixada" />}
             </div>

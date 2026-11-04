@@ -452,7 +452,7 @@ export function useVoice(gateway: Gateway) {
   const toggleMute = async () => {
     const next = !muted;
     if (!next && micBlocked()) {
-      toast(serverRef.current.deaf ? 'O dono do servidor ensurdeceu você' : 'O dono do servidor silenciou você');
+      toast(serverRef.current.deaf ? 'Você foi ensurdecido no servidor' : 'Você foi silenciado no servidor');
       return;
     }
     setMuted(next);
@@ -468,7 +468,7 @@ export function useVoice(gateway: Gateway) {
   const toggleDeafen = () => {
     const next = !deafRef.current;
     if (!next && serverRef.current.deaf) {
-      toast('O dono do servidor ensurdeceu você');
+      toast('Você foi ensurdecido no servidor');
       return;
     }
     deafRef.current = next;

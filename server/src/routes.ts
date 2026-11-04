@@ -5,12 +5,13 @@ import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk'
 import { requireAuth, signSession } from './auth.js';
 import { musicSearchEnabled, searchYouTube } from './music.js';
 import {
-  get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildPayload, guildsOf, isMember, listMessages, getUser, memberIds,
-  pinnedMessages, searchMessages, ownsGuild, relationshipsOf, relationshipType, findDm,
+  get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildsOf, isMember, listMessages, getUser, memberIds,
+  pinnedMessages, searchMessages, relationshipsOf, relationshipType, findDm, channelsOf, DEFAULT_EVERYONE_PERMS, type Channel,
 } from './db.js';
 import {
-  broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
+  broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToChannel, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
 } from './gateway.js';
+import { ALL_PERMS, CHANNEL_PERMS, channelWithOverwrites, guildPayload, P, permContext, type PermContext } from './permissions.js';
 
 /** Reação: um emoji (qualquer um, como no Discord). Recusa texto comum para ninguém "reagir" com palavras. */
 const isEmoji = (s: string) => s.length > 0 && s.length <= 16 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s) && !/[A-Za-z0-9<>]/.test(s);
@@ -51,11 +52,17 @@ const LIVEKIT_API_SECRET = env('LIVEKIT_API_SECRET') ?? 'secret';
 const livekitConfigured = !!(env('LIVEKIT_URL') && env('LIVEKIT_API_KEY') && env('LIVEKIT_API_SECRET'));
 const roomService = () => new RoomServiceClient(LIVEKIT_URL.replace(/^ws/i, 'http'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 const voiceRoom = (channelId: string) => `voice:${channelId}`;
-/** O que a pessoa pode mandar na call: sem microfone quando o dono do servidor silenciou ou ensurdeceu. */
-const voiceSources = (mod: { mute: boolean; deaf: boolean }) =>
-  [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO].filter(
-    (s) => s !== TrackSource.MICROPHONE || (!mod.mute && !mod.deaf),
+/**
+ * O que a pessoa pode mandar na call: sem microfone quando foi silenciada/ensurdecida no servidor
+ * ou não tem a permissão "Falar"; sem câmera e tela sem a permissão "Transmitir".
+ */
+const voiceSources = (mod: { mute: boolean; deaf: boolean }, perms: number) =>
+  [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO].filter((s) =>
+    s === TrackSource.MICROPHONE ? !mod.mute && !mod.deaf && !!(perms & P.SPEAK) : !!(perms & P.STREAM),
   );
+const voicePermission = (mod: { mute: boolean; deaf: boolean }, perms: number) => ({
+  canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: voiceSources(mod, perms),
+});
 if (process.env.NODE_ENV === 'production' && !livekitConfigured)
   console.warn('[voz] LIVEKIT_URL, LIVEKIT_API_KEY ou LIVEKIT_API_SECRET não configurados: a voz não vai funcionar.');
 
@@ -68,6 +75,9 @@ const credentials = z.object({
 function bad(message: string) {
   return Object.assign(new Error(message), { statusCode: 400 });
 }
+const NO_PERM = 'Você não tem permissão para isso';
+const roleColor = z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable();
+const permBits = z.number().int().min(0).max(ALL_PERMS);
 
 export function registerRoutes(app: FastifyInstance) {
   // Diagnóstico sem segredos: mostra se a voz está configurada e para onde o cliente vai conectar.
@@ -138,9 +148,189 @@ export function registerRoutes(app: FastifyInstance) {
   app.register(async (api) => {
     api.addHook('preHandler', requireAuth);
 
+    /** A pessoa tem a permissão nesse canal? `guildWide`: permissão do servidor (ex.: gerenciar canais), nunca em conversa direta. */
+    const canIn = async (ch: Pick<Channel, 'id' | 'guild_id'>, userId: string, perm: number, guildWide = false) => {
+      const ctx = await permContext(ch.guild_id);
+      if (!ctx) return false;
+      if (guildWide) return !ctx.isDm && ctx.can(userId, perm);
+      return ctx.can(userId, perm, ch.id);
+    };
+
+    /** Canal criado ou mudou: quem pode ver recebe a versão nova; quem perdeu o acesso vê o canal sumir. */
+    const syncChannel = async (ch: Channel, ctx?: PermContext) => {
+      const c = ctx ?? (await permContext(ch.guild_id));
+      if (!c) return;
+      const last = (await get('SELECT MAX(id) AS id FROM messages WHERE channel_id = ?', ch.id)) as { id: string | null } | undefined;
+      const full = { ...channelWithOverwrites(ch, c), last_message_id: last?.id ?? null };
+      for (const id of c.members)
+        if (c.can(id, P.VIEW_CHANNEL, ch.id)) sendToUser(id, 'CHANNEL_UPDATE', full);
+        else sendToUser(id, 'CHANNEL_DELETE', { id: ch.id, guild_id: ch.guild_id });
+      await applyVoicePerms(c);
+    };
+
+    /**
+     * Cargos mudaram: cada membro recebe os cargos, os cargos de cada um e os canais que agora pode ver.
+     * Quem está na voz tem as permissões do LiveKit atualizadas (ou sai, se perdeu o acesso ao canal).
+     */
+    const syncGuild = async (guildId: string) => {
+      const ctx = await permContext(guildId);
+      if (!ctx) return;
+      const channels = await channelsOf(guildId);
+      const member_roles = Object.fromEntries(ctx.memberRoles);
+      for (const id of ctx.members)
+        sendToUser(id, 'GUILD_SYNC', {
+          id: guildId,
+          roles: ctx.roles,
+          member_roles,
+          channels: channels.filter((c) => ctx.can(id, P.VIEW_CHANNEL, c.id)).map((c) => channelWithOverwrites(c, ctx)),
+        });
+      await applyVoicePerms(ctx);
+    };
+
+    const applyVoicePerms = async (ctx: NonNullable<PermContext>) => {
+      for (const id of ctx.members) {
+        const v = voiceStateOf(id);
+        if (!v || v.guildId !== ctx.guild.id) continue;
+        const room = voiceRoom(v.channelId);
+        if (!ctx.can(id, P.VIEW_CHANNEL | P.CONNECT, v.channelId)) {
+          sendToUser(id, 'VOICE_SERVER_ACTION', { action: 'disconnect', by: 'Uma mudança de permissões' });
+          await setVoiceState({ id }, null);
+          await roomService().removeParticipant(room, id).catch(() => {});
+          continue;
+        }
+        await roomService()
+          .updateParticipant(room, id, { permission: voicePermission(getServerMod(ctx.guild.id, id), ctx.perms(id, v.channelId)) })
+          .catch(() => {});
+      }
+    };
+
+    // ---------- Cargos ----------
+    /** Contexto de quem gerencia cargos num servidor de verdade (não conversa direta). */
+    const roleManager = async (guildId: string, userId: string) => {
+      const ctx = await permContext(guildId);
+      return ctx && !ctx.isDm && ctx.can(userId, P.MANAGE_ROLES) ? ctx : undefined;
+    };
+    /** Só dá para dar ou tirar permissões que você mesmo tem (o dono e administradores têm todas). */
+    const grantsOnlyOwn = (ctx: NonNullable<PermContext>, userId: string, before: number, after: number) =>
+      ((before ^ after) & ~ctx.perms(userId)) === 0;
+
+    api.post('/api/guilds/:guildId/roles', async (req, reply) => {
+      const { guildId } = req.params as { guildId: string };
+      const ctx = await roleManager(guildId, req.user.id);
+      if (!ctx) return reply.code(403).send({ error: NO_PERM });
+      if (ctx.roles.length >= 100) return reply.code(400).send({ error: 'Limite de 100 cargos por servidor' });
+      const body = z
+        .object({ name: z.string().trim().min(1).max(64).default('novo cargo'), color: roleColor.optional(), permissions: permBits.default(0), hoist: z.boolean().default(false) })
+        .parse(req.body ?? {});
+      if (!grantsOnlyOwn(ctx, req.user.id, 0, body.permissions)) return reply.code(403).send({ error: 'Você só pode dar permissões que você tem' });
+      // Cargo novo entra logo acima do @everyone (como no Discord); os outros sobem uma posição.
+      await run('UPDATE roles SET position = position + 1 WHERE guild_id = ? AND id <> ?', guildId, guildId);
+      const id = newId();
+      await run(
+        'INSERT INTO roles (id, guild_id, name, color, permissions, position, hoist, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
+        id, guildId, body.name, body.color ?? null, body.permissions, body.hoist ? 1 : 0, Date.now(),
+      );
+      await syncGuild(guildId);
+      return (await permContext(guildId))!.roles.find((r) => r.id === id);
+    });
+
+    api.patch('/api/guilds/:guildId/roles/:roleId', async (req, reply) => {
+      const { guildId, roleId } = req.params as { guildId: string; roleId: string };
+      const ctx = await roleManager(guildId, req.user.id);
+      const role = ctx?.roles.find((r) => r.id === roleId);
+      if (!ctx || !role) return reply.code(403).send({ error: NO_PERM });
+      if (role.position >= ctx.top(req.user.id)) return reply.code(403).send({ error: 'Você só pode editar cargos abaixo do seu cargo mais alto' });
+      const body = z
+        .object({ name: z.string().trim().min(1).max(64).optional(), color: roleColor.optional(), permissions: permBits.optional(), hoist: z.boolean().optional() })
+        .parse(req.body);
+      const everyone = role.id === guildId;
+      if (everyone && (body.name !== undefined || body.color !== undefined || body.hoist !== undefined))
+        return reply.code(400).send({ error: 'No @everyone só dá para mudar as permissões' });
+      if (body.permissions !== undefined && !grantsOnlyOwn(ctx, req.user.id, role.permissions, body.permissions))
+        return reply.code(403).send({ error: 'Você só pode dar ou tirar permissões que você tem' });
+      if (body.name !== undefined) await run('UPDATE roles SET name = ? WHERE id = ?', body.name, roleId);
+      if (body.color !== undefined) await run('UPDATE roles SET color = ? WHERE id = ?', body.color, roleId);
+      if (body.permissions !== undefined) await run('UPDATE roles SET permissions = ? WHERE id = ?', body.permissions, roleId);
+      if (body.hoist !== undefined) await run('UPDATE roles SET hoist = ? WHERE id = ?', body.hoist ? 1 : 0, roleId);
+      await syncGuild(guildId);
+      return (await permContext(guildId))!.roles.find((r) => r.id === roleId);
+    });
+
+    api.delete('/api/guilds/:guildId/roles/:roleId', async (req, reply) => {
+      const { guildId, roleId } = req.params as { guildId: string; roleId: string };
+      const ctx = await roleManager(guildId, req.user.id);
+      const role = ctx?.roles.find((r) => r.id === roleId);
+      if (!ctx || !role) return reply.code(403).send({ error: NO_PERM });
+      if (roleId === guildId) return reply.code(400).send({ error: 'O @everyone não pode ser apagado' });
+      if (role.position >= ctx.top(req.user.id)) return reply.code(403).send({ error: 'Você só pode apagar cargos abaixo do seu cargo mais alto' });
+      await run('DELETE FROM roles WHERE id = ?', roleId);
+      await syncGuild(guildId);
+      return { ok: true };
+    });
+
+    // Nova ordem dos cargos (do mais alto para o mais baixo, sem o @everyone).
+    // Quem não é o dono não mexe nos cargos do seu nível para cima.
+    api.put('/api/guilds/:guildId/roles/order', async (req, reply) => {
+      const { guildId } = req.params as { guildId: string };
+      const ctx = await roleManager(guildId, req.user.id);
+      if (!ctx) return reply.code(403).send({ error: NO_PERM });
+      const { ids } = z.object({ ids: z.array(z.string()).max(100) }).parse(req.body);
+      const current = ctx.roles.filter((r) => r.id !== guildId); // já vem do mais alto para o mais baixo
+      if (ids.length !== current.length || new Set(ids).size !== ids.length || !ids.every((id) => current.some((r) => r.id === id)))
+        return reply.code(400).send({ error: 'Lista de cargos desatualizada. Recarregue e tente de novo.' });
+      const n = current.length;
+      const oldPos = new Map(current.map((r, i) => [r.id, n - i]));
+      const mine = ctx.memberRoles.get(req.user.id) ?? [];
+      const myTop = ctx.isOwner(req.user.id) ? Infinity : Math.max(0, ...mine.map((id) => oldPos.get(id) ?? 0));
+      for (const [i, id] of ids.entries())
+        if (oldPos.get(id)! >= myTop && n - i !== oldPos.get(id)) return reply.code(403).send({ error: 'Você só pode reordenar cargos abaixo do seu' });
+      for (const [i, id] of ids.entries()) await run('UPDATE roles SET position = ? WHERE id = ?', n - i, id);
+      await syncGuild(guildId);
+      return { ok: true };
+    });
+
+    // Dar ou tirar um cargo de alguém.
+    for (const method of ['put', 'delete'] as const)
+      api[method]('/api/guilds/:guildId/members/:userId/roles/:roleId', async (req, reply) => {
+        const { guildId, userId, roleId } = req.params as { guildId: string; userId: string; roleId: string };
+        const ctx = await roleManager(guildId, req.user.id);
+        const role = ctx?.roles.find((r) => r.id === roleId);
+        if (!ctx || !role || roleId === guildId) return reply.code(403).send({ error: NO_PERM });
+        if (!ctx.members.has(userId)) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
+        if (role.position >= ctx.top(req.user.id)) return reply.code(403).send({ error: 'Você só pode dar cargos abaixo do seu cargo mais alto' });
+        if (method === 'put')
+          await run('INSERT INTO member_roles (guild_id, user_id, role_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', guildId, userId, roleId);
+        else await run('DELETE FROM member_roles WHERE user_id = ? AND role_id = ?', userId, roleId);
+        await syncGuild(guildId);
+        return { ok: true };
+      });
+
+    // Permissões de um cargo num canal (canal privado = @everyone sem "Ver canal").
+    api.put('/api/channels/:channelId/overwrites/:roleId', async (req, reply) => {
+      const { channelId, roleId } = req.params as { channelId: string; roleId: string };
+      const ch = await getChannel(channelId);
+      const ctx = ch && (await permContext(ch.guild_id));
+      if (!ch || !ctx || ctx.isDm || !ctx.can(req.user.id, P.MANAGE_CHANNELS)) return reply.code(403).send({ error: NO_PERM });
+      if (!ctx.roles.some((r) => r.id === roleId)) return reply.code(404).send({ error: 'Cargo não encontrado' });
+      const body = z.object({ allow: permBits, deny: permBits }).parse(req.body);
+      if ((body.allow | body.deny) & ~CHANNEL_PERMS) return reply.code(400).send({ error: 'Essa permissão não vale por canal' });
+      const old = ctx.overwrites.get(ch.id)?.find((o) => o.id === roleId) ?? { allow: 0, deny: 0 };
+      const changed = (old.allow ^ body.allow) | (old.deny ^ body.deny);
+      if (changed & ~ctx.perms(req.user.id)) return reply.code(403).send({ error: 'Você só pode mexer em permissões que você tem' });
+      const allow = body.allow & ~body.deny;
+      if (!allow && !body.deny) await run('DELETE FROM channel_overwrites WHERE channel_id = ? AND target_id = ?', ch.id, roleId);
+      else
+        await run(
+          'INSERT INTO channel_overwrites (channel_id, target_id, allow, deny) VALUES (?, ?, ?, ?) ON CONFLICT (channel_id, target_id) DO UPDATE SET allow = excluded.allow, deny = excluded.deny',
+          ch.id, roleId, allow, body.deny,
+        );
+      await syncChannel(ch);
+      return { ok: true };
+    });
+
     api.get('/api/me', async (req) => ({
       user: req.user,
-      guilds: await Promise.all((await guildsOf(req.user.id)).map(guildPayload)),
+      guilds: await Promise.all((await guildsOf(req.user.id)).map((g) => guildPayload(g, req.user.id))),
     }));
 
     // ---------- Servidores ----------
@@ -150,18 +340,24 @@ export function registerRoutes(app: FastifyInstance) {
       const now = Date.now();
       await run('INSERT INTO guilds (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)', id, name, req.user.id, now);
       await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', id, req.user.id, now);
+      await run(
+        "INSERT INTO roles (id, guild_id, name, color, permissions, position, hoist, created_at) VALUES (?, ?, '@everyone', NULL, ?, 0, 0, ?)",
+        id, id, DEFAULT_EVERYONE_PERMS, now,
+      );
       const ins = 'INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)';
       await run(ins, newId(), id, 'geral', 'text', 0);
       await run(ins, newId(), id, 'Geral', 'voice', 0);
-      const payload = await guildPayload((await getGuild(id))!);
+      const payload = await guildPayload((await getGuild(id))!, req.user.id);
       sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
       return payload;
     });
 
     api.post('/api/guilds/:guildId/invites', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
-      if (!(await isMember(guildId, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
-      if (Number((await getGuild(guildId))?.is_dm)) return reply.code(400).send({ error: 'Conversa direta não tem convite' });
+      const ctx = await permContext(guildId);
+      if (!ctx?.members.has(req.user.id)) return reply.code(403).send({ error: 'Sem acesso' });
+      if (ctx.isDm) return reply.code(400).send({ error: 'Conversa direta não tem convite' });
+      if (!ctx.can(req.user.id, P.CREATE_INVITE)) return reply.code(403).send({ error: 'Você não tem permissão para criar convites' });
       const opts = z
         .object({ max_uses: z.number().int().positive().nullable().optional(), expires_in_hours: z.number().positive().nullable().optional() })
         .parse(req.body ?? {});
@@ -186,7 +382,7 @@ export function registerRoutes(app: FastifyInstance) {
         await run('UPDATE invites SET uses = uses + 1 WHERE code = ?', code);
         await sendToGuild(inv.guild_id, 'GUILD_MEMBER_ADD', { guild_id: inv.guild_id, user: req.user, status: presenceOf(req.user.id) });
       }
-      const payload = await guildPayload((await getGuild(inv.guild_id))!);
+      const payload = await guildPayload((await getGuild(inv.guild_id))!, req.user.id);
       sendToUser(req.user.id, 'GUILD_CREATE', withPresence(payload));
       return payload;
     });
@@ -276,17 +472,17 @@ export function registerRoutes(app: FastifyInstance) {
         await run(ins, newId(), guildId, 'conversa', 'text', 0);
         await run(ins, newId(), guildId, 'Chamada', 'voice', 0);
       }
-      const payload = withPresence(await guildPayload((await getGuild(guildId))!));
-      if (created) for (const id of [req.user.id, userId]) sendToUser(id, 'GUILD_CREATE', payload);
+      const guild = (await getGuild(guildId))!;
+      const payload = withPresence(await guildPayload(guild, req.user.id));
+      if (created) for (const id of [req.user.id, userId]) sendToUser(id, 'GUILD_CREATE', withPresence(await guildPayload(guild, id)));
       return payload;
     });
 
     // ---------- Canais ----------
     api.post('/api/guilds/:guildId/channels', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
-      const guild = await getGuild(guildId);
-      // MVP: só o dono cria canais. Na fase 2 isso vira a permissão "Gerenciar canais".
-      if (!ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Só o dono do servidor pode criar canais' });
+      const ctx = await permContext(guildId);
+      if (!ctx || ctx.isDm || !ctx.can(req.user.id, P.MANAGE_CHANNELS)) return reply.code(403).send({ error: 'Você não tem permissão para criar canais' });
       const body = z
         .object({ name: z.string().trim().min(1).max(64), type: z.enum(['text', 'voice']) })
         .parse(req.body);
@@ -297,15 +493,15 @@ export function registerRoutes(app: FastifyInstance) {
       )) as { p: number }).p;
       await run('INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)', id, guildId, name, body.type, pos);
       const ch = (await getChannel(id))!;
-      await sendToGuild(guildId, 'CHANNEL_CREATE', ch);
-      return ch;
+      await syncChannel(ch);
+      return channelWithOverwrites(ch, ctx);
     });
 
     // ---------- Mensagens ----------
     api.get('/api/channels/:channelId/messages', async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      if (!ch || !(await canIn(ch, req.user.id, P.VIEW_CHANNEL))) return reply.code(403).send({ error: 'Sem acesso' });
       const { before, limit } = z
         .object({ before: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) })
         .parse(req.query);
@@ -320,7 +516,9 @@ export function registerRoutes(app: FastifyInstance) {
     api.post('/api/channels/:channelId/messages', { ...messageLimit, bodyLimit: 40 * 1024 * 1024 }, async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || ch.type !== 'text' || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const ctx = ch && (await permContext(ch.guild_id));
+      if (!ch || !ctx || ch.type !== 'text' || !ctx.can(req.user.id, P.VIEW_CHANNEL, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
+      if (!ctx.can(req.user.id, P.SEND_MESSAGES, ch.id)) return reply.code(403).send({ error: 'Você não tem permissão para mandar mensagens neste canal' });
       const body = z
         .object({
           content: z.string().trim().max(4000).default(''),
@@ -329,6 +527,8 @@ export function registerRoutes(app: FastifyInstance) {
         })
         .parse(req.body);
       if (!body.content && !body.attachments.length) return reply.code(400).send({ error: 'Mensagem vazia' });
+      if (body.attachments.length && !ctx.can(req.user.id, P.ATTACH_FILES, ch.id))
+        return reply.code(403).send({ error: 'Você não tem permissão para mandar arquivos neste canal' });
       const files = body.attachments.map((a) => ({ ...a, bytes: Buffer.from(a.data, 'base64') }));
       if (files.some((f) => f.bytes.length > MAX_FILE)) return reply.code(413).send({ error: 'Arquivo maior que 8 MB' });
       let replyTo: string | null = null;
@@ -348,7 +548,7 @@ export function registerRoutes(app: FastifyInstance) {
           newId(), id, f.name.replace(/[\\/]/g, '_'), f.type, f.bytes.length, f.bytes.toString('base64'), now,
         );
       const msg = (await getMessage(id))!;
-      await sendToGuild(ch.guild_id, 'MESSAGE_CREATE', msg);
+      await sendToChannel(ch, 'MESSAGE_CREATE', msg, ctx);
       return msg;
     });
 
@@ -359,7 +559,7 @@ export function registerRoutes(app: FastifyInstance) {
       const { content } = z.object({ content: z.string().trim().min(1).max(4000) }).parse(req.body);
       await run('UPDATE messages SET content = ?, edited_at = ? WHERE id = ?', content, Date.now(), id);
       const updated = (await getMessage(id))!;
-      await sendToGuild((await getChannel(msg.channel_id))!.guild_id, 'MESSAGE_UPDATE', updated);
+      await sendToChannel((await getChannel(msg.channel_id))!, 'MESSAGE_UPDATE', updated);
       return updated;
     });
 
@@ -368,10 +568,10 @@ export function registerRoutes(app: FastifyInstance) {
       const msg = await getMessage(id);
       if (!msg) return reply.code(404).send({ error: 'Não encontrada' });
       const ch = (await getChannel(msg.channel_id))!;
-      const guild = (await getGuild(ch.guild_id))!;
-      if (msg.author.id !== req.user.id && !ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Sem acesso' });
+      const ctx = (await permContext(ch.guild_id))!;
+      if (msg.author.id !== req.user.id && !ctx.can(req.user.id, P.MANAGE_MESSAGES, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
       await run('DELETE FROM messages WHERE id = ?', id);
-      await sendToGuild(ch.guild_id, 'MESSAGE_DELETE', { id, channel_id: ch.id });
+      await sendToChannel(ch, 'MESSAGE_DELETE', { id, channel_id: ch.id }, ctx);
       return { ok: true };
     });
 
@@ -384,21 +584,22 @@ export function registerRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const msg = await getMessage(id);
       const ch = msg && (await getChannel(msg.channel_id));
-      if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
-      const guild = (await getGuild(ch.guild_id))!;
+      const ctx = ch && (await permContext(ch.guild_id));
+      if (!msg || !ch || !ctx?.can(req.user.id, P.VIEW_CHANNEL, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
       // Na conversa direta as duas pessoas podem fixar qualquer mensagem.
-      if (!Number(guild.is_dm) && !ownsGuild(guild, req.user.id) && msg.author.id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor ou quem escreveu pode fixar' });
+      if (!ctx.isDm && !ctx.can(req.user.id, P.MANAGE_MESSAGES, ch.id) && msg.author.id !== req.user.id)
+        return reply.code(403).send({ error: 'Só quem escreveu ou quem pode gerenciar mensagens pode fixar' });
       const { pinned } = z.object({ pinned: z.boolean() }).parse(req.body);
       await run('UPDATE messages SET pinned = ? WHERE id = ?', pinned ? 1 : 0, id);
       const updated = (await getMessage(id))!;
-      await sendToGuild(ch.guild_id, 'MESSAGE_UPDATE', updated);
+      await sendToChannel(ch, 'MESSAGE_UPDATE', updated, ctx);
       return updated;
     });
 
     api.get('/api/channels/:channelId/pins', async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      if (!ch || !(await canIn(ch, req.user.id, P.VIEW_CHANNEL))) return reply.code(403).send({ error: 'Sem acesso' });
       return pinnedMessages(channelId);
     });
 
@@ -414,9 +615,11 @@ export function registerRoutes(app: FastifyInstance) {
 
     api.get('/api/guilds/:guildId/search', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
-      if (!(await isMember(guildId, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const ctx = await permContext(guildId);
+      if (!ctx?.members.has(req.user.id)) return reply.code(403).send({ error: 'Sem acesso' });
       const { q } = z.object({ q: z.string().trim().min(1).max(100) }).parse(req.query);
-      return searchMessages(guildId, q);
+      const visible = (await channelsOf(guildId)).filter((c) => c.type === 'text' && ctx.can(req.user.id, P.VIEW_CHANNEL, c.id)).map((c) => c.id);
+      return searchMessages(visible, q);
     });
 
     // ---------- Reações ----------
@@ -425,8 +628,11 @@ export function registerRoutes(app: FastifyInstance) {
       if (!isEmoji(emoji)) return reply.code(400).send({ error: 'Reação inválida' });
       const msg = await getMessage(id);
       const ch = msg && (await getChannel(msg.channel_id));
-      if (!msg || !ch || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const ctx = ch && (await permContext(ch.guild_id));
+      if (!msg || !ch || !ctx?.can(req.user.id, P.VIEW_CHANNEL, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
       const on = (req.body as { on?: boolean } | undefined)?.on !== false;
+      // Tirar a própria reação sempre pode; reagir de novo precisa da permissão.
+      if (on && !ctx.can(req.user.id, P.ADD_REACTIONS, ch.id)) return reply.code(403).send({ error: 'Você não tem permissão para reagir neste canal' });
       if (on)
         await run(
           'INSERT INTO reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
@@ -434,7 +640,7 @@ export function registerRoutes(app: FastifyInstance) {
         );
       else await run('DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', id, req.user.id, emoji);
       const updated = (await getMessage(id))!;
-      await sendToGuild(ch.guild_id, 'MESSAGE_UPDATE', updated);
+      await sendToChannel(ch, 'MESSAGE_UPDATE', updated, ctx);
       return updated;
     });
 
@@ -442,7 +648,10 @@ export function registerRoutes(app: FastifyInstance) {
     api.post('/api/channels/:channelId/voice-token', async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || ch.type !== 'voice' || !(await isMember(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Sem acesso' });
+      const ctx = ch && (await permContext(ch.guild_id));
+      if (!ch || !ctx || ch.type !== 'voice' || !ctx.can(req.user.id, P.VIEW_CHANNEL, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
+      if (!ctx.can(req.user.id, P.CONNECT, ch.id)) return reply.code(403).send({ error: 'Você não tem permissão para entrar neste canal de voz' });
+      const perms = ctx.perms(req.user.id, ch.id);
       if (process.env.NODE_ENV === 'production' && !livekitConfigured)
         return reply.code(503).send({ error: 'Servidor de voz não configurado: preencha LIVEKIT_URL, LIVEKIT_API_KEY e LIVEKIT_API_SECRET no Render' });
       const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
@@ -451,15 +660,9 @@ export function registerRoutes(app: FastifyInstance) {
         ttl: '6h',
       });
       const mod = getServerMod(ch.guild_id, req.user.id);
-      at.addGrant({
-        room: voiceRoom(ch.id),
-        roomJoin: true,
-        canPublish: true,
-        canSubscribe: true,
-        canPublishData: true,
-        canPublishSources: voiceSources(mod),
-      });
-      return { url: LIVEKIT_URL, token: await at.toJwt(), server_mute: mod.mute, server_deaf: mod.deaf };
+      at.addGrant({ room: voiceRoom(ch.id), roomJoin: true, ...voicePermission(mod, perms) });
+      // Sem "Falar" a pessoa entra como silenciada (o site trava o microfone como no silêncio do servidor).
+      return { url: LIVEKIT_URL, token: await at.toJwt(), server_mute: mod.mute || !(perms & P.SPEAK), server_deaf: mod.deaf };
     });
 
     // ---------- Minha conta e perfil ----------
@@ -500,15 +703,11 @@ export function registerRoutes(app: FastifyInstance) {
       return { status };
     });
 
-    // ---------- Configurações do servidor (só o dono) ----------
-    const ownedGuild = async (guildId: string, userId: string) => {
-      const g = await getGuild(guildId);
-      return ownsGuild(g, userId) ? g : undefined;
-    };
-
+    // ---------- Configurações do servidor (cada parte pede a sua permissão) ----------
     api.patch('/api/guilds/:guildId', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
-      if (!(await ownedGuild(guildId, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      const ctx = await permContext(guildId);
+      if (!ctx || ctx.isDm || !ctx.can(req.user.id, P.MANAGE_GUILD)) return reply.code(403).send({ error: 'Você não tem permissão para editar o servidor' });
       const body = z.object({ name: z.string().trim().min(1).max(64).optional(), icon: imageUrl.nullable().optional() }).parse(req.body);
       if (body.name !== undefined) await run('UPDATE guilds SET name = ? WHERE id = ?', body.name, guildId);
       if (body.icon !== undefined) await run('UPDATE guilds SET icon = ? WHERE id = ?', body.icon, guildId);
@@ -525,13 +724,14 @@ export function registerRoutes(app: FastifyInstance) {
         await roomService().removeParticipant(voiceRoom(v.channelId), userId).catch(() => {});
       }
       await run('DELETE FROM members WHERE guild_id = ? AND user_id = ?', guildId, userId);
+      await run('DELETE FROM member_roles WHERE guild_id = ? AND user_id = ?', guildId, userId);
       sendToUser(userId, 'GUILD_DELETE', { id: guildId });
       await sendToGuild(guildId, 'GUILD_MEMBER_REMOVE', { guild_id: guildId, user_id: userId });
     };
 
     api.delete('/api/guilds/:guildId', async (req, reply) => {
       const { guildId } = req.params as { guildId: string };
-      if (!(await ownedGuild(guildId, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode apagar' });
+      if (!(await permContext(guildId))?.isOwner(req.user.id)) return reply.code(403).send({ error: 'Só o dono do servidor pode apagar' });
       const ids = await memberIds(guildId);
       for (const id of ids) {
         const v = voiceStateOf(id);
@@ -553,7 +753,11 @@ export function registerRoutes(app: FastifyInstance) {
       if (Number(guild.is_dm)) return reply.code(400).send({ error: 'Não dá para sair de uma conversa direta' });
       if (userId === req.user.id) {
         if (guild.owner_id === userId) return reply.code(400).send({ error: 'O dono não pode sair. Apague o servidor nas configurações dele.' });
-      } else if (guild.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só o dono do servidor pode expulsar' });
+      } else {
+        const ctx = (await permContext(guild))!;
+        if (!ctx.can(req.user.id, P.KICK_MEMBERS)) return reply.code(403).send({ error: 'Você não tem permissão para expulsar' });
+        if (!ctx.outranks(req.user.id, userId)) return reply.code(403).send({ error: 'Você só pode expulsar quem tem cargo mais baixo que o seu' });
+      }
       await removeMember(guildId, userId);
       return { ok: true };
     });
@@ -561,20 +765,20 @@ export function registerRoutes(app: FastifyInstance) {
     api.patch('/api/channels/:channelId', async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || !(await ownedGuild(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      if (!ch || !(await canIn(ch, req.user.id, P.MANAGE_CHANNELS, true))) return reply.code(403).send({ error: 'Você não tem permissão para editar canais' });
       const body = z.object({ name: z.string().trim().min(1).max(64).optional(), topic: optText(1024) }).parse(req.body);
       if (body.name !== undefined)
         await run('UPDATE channels SET name = ? WHERE id = ?', ch.type === 'text' ? body.name.toLowerCase().replace(/\s+/g, '-') : body.name, ch.id);
       if (body.topic !== undefined) await run('UPDATE channels SET topic = ? WHERE id = ?', body.topic, ch.id);
       const updated = (await getChannel(ch.id))!;
-      await sendToGuild(ch.guild_id, 'CHANNEL_UPDATE', updated);
+      await syncChannel(updated);
       return updated;
     });
 
     api.delete('/api/channels/:channelId', async (req, reply) => {
       const { channelId } = req.params as { channelId: string };
       const ch = await getChannel(channelId);
-      if (!ch || !(await ownedGuild(ch.guild_id, req.user.id))) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
+      if (!ch || !(await canIn(ch, req.user.id, P.MANAGE_CHANNELS, true))) return reply.code(403).send({ error: 'Você não tem permissão para apagar canais' });
       if (ch.type === 'text' && ((await get("SELECT COUNT(*) AS n FROM channels WHERE guild_id = ? AND type = 'text'", ch.guild_id)) as { n: number }).n <= 1)
         return reply.code(400).send({ error: 'O servidor precisa de pelo menos um canal de texto' });
       if (ch.type === 'voice') {
@@ -587,7 +791,7 @@ export function registerRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
-    // ---------- Moderação de voz (só o dono do servidor) ----------
+    // ---------- Moderação de voz (Silenciar membros / Mover membros) ----------
     const modBody = z.object({
       action: z.enum(['mute', 'unmute', 'deafen', 'undeafen', 'disconnect', 'move']),
       channel_id: z.string().optional(),
@@ -596,10 +800,14 @@ export function registerRoutes(app: FastifyInstance) {
       const { guildId, userId } = req.params as { guildId: string; userId: string };
       const body = modBody.safeParse(req.body);
       if (!body.success) return reply.code(400).send({ error: 'Ação inválida' });
-      const guild = await getGuild(guildId);
-      if (!ownsGuild(guild, req.user.id)) return reply.code(403).send({ error: 'Só o dono do servidor pode fazer isso' });
-      if (!(await isMember(guildId, userId))) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
+      const ctx = await permContext(guildId);
+      if (!ctx || ctx.isDm) return reply.code(403).send({ error: NO_PERM });
+      if (!ctx.members.has(userId)) return reply.code(404).send({ error: 'Essa pessoa não está no servidor' });
       const { action, channel_id } = body.data;
+      const need = action === 'move' || action === 'disconnect' ? P.MOVE_MEMBERS : P.MUTE_MEMBERS;
+      if (!ctx.can(req.user.id, need)) return reply.code(403).send({ error: NO_PERM });
+      if (userId !== req.user.id && !ctx.outranks(req.user.id, userId))
+        return reply.code(403).send({ error: 'Você só pode moderar quem tem cargo mais baixo que o seu' });
       const v = voiceStateOf(userId);
       const inVoice = v && v.guildId === guildId ? v : undefined;
       const by = req.user.display_name;
@@ -618,9 +826,7 @@ export function registerRoutes(app: FastifyInstance) {
               const mic = p.tracks.find((t) => t.source === TrackSource.MICROPHONE);
               if (mic) await svc.mutePublishedTrack(room, userId, mic.sid, true);
             }
-            await svc.updateParticipant(room, userId, {
-              permission: { canPublish: true, canSubscribe: true, canPublishData: true, canPublishSources: voiceSources(next) },
-            });
+            await svc.updateParticipant(room, userId, { permission: voicePermission(next, ctx.perms(userId, inVoice.channelId)) });
           } catch (e) {
             req.log.warn(e, 'moderação de voz: LiveKit não respondeu');
           }
@@ -640,6 +846,7 @@ export function registerRoutes(app: FastifyInstance) {
       // Mover: o site da pessoa troca de canal sozinho. Se em 5 s ela ainda estiver no canal antigo, é tirada de lá.
       const target = channel_id ? await getChannel(channel_id) : undefined;
       if (!target || target.type !== 'voice' || target.guild_id !== guildId) return reply.code(400).send({ error: 'Canal de voz inválido' });
+      if (!ctx.can(req.user.id, P.VIEW_CHANNEL | P.CONNECT, target.id)) return reply.code(403).send({ error: 'Você não pode entrar nesse canal' });
       if (target.id === inVoice.channelId) return { ok: true };
       const from = inVoice.channelId;
       sendToUser(userId, 'VOICE_SERVER_ACTION', { action, by, channel_id: target.id });
