@@ -3,6 +3,7 @@ import { api, STATUS_LABELS, type User, type UserStatus } from './api';
 import { Avatar, pickImage, ProfileBody, defaultColor } from './profile';
 import { comboName, updateSettings, useSettings, type Settings } from './settings';
 import { requestNotifyPermission } from './notify';
+import { disablePush, enablePush, pushSupport, syncPush } from './push';
 import { hasDesktopAppSettings } from './appearance';
 import { myPresence } from './store';
 
@@ -328,6 +329,7 @@ export function DesktopNotifySettings() {
   const choose = async (v: Settings['desktopNotify']) => {
     set({ desktopNotify: v });
     if (v !== 'off') setPerm(await requestNotifyPermission());
+    void syncPush();
   };
   return (
     <>
@@ -336,7 +338,59 @@ export function DesktopNotifySettings() {
       {perm === 'denied' && s.desktopNotify !== 'off' && <p className="warn-box">O navegador bloqueou os avisos do Nexo. Libere nas permissões do site (cadeado ao lado do endereço).</p>}
       {perm === 'unsupported' && <p className="muted">Este navegador não mostra avisos na área de trabalho.</p>}
       <small className="muted">Os avisos só aparecem com o Nexo fora de foco. No status "Não perturbe" nada aparece nem toca.</small>
+      <PushSettings />
       <Toggle label='Ficar "Ausente" sozinho' hint="Depois de 10 minutos sem mexer no computador (não vale durante a call)." checked={s.autoIdle} onChange={(v) => set({ autoIdle: v })} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- Avisos com o Nexo fechado
+function PushSettings() {
+  const s = useSettings();
+  const support = pushSupport();
+  const [status, setStatus] = useState<string | null>(null);
+  const toggle = async (on: boolean) => {
+    setStatus(null);
+    if (!on) {
+      set({ pushEnabled: false });
+      await disablePush();
+      return;
+    }
+    const r = await enablePush();
+    if (r === 'ok') {
+      set({ pushEnabled: true });
+      setStatus('Pronto! Este aparelho vai receber os avisos mesmo com o Nexo fechado.');
+    } else if (r === 'denied') setStatus('O navegador bloqueou os avisos. Libere nas permissões do site (cadeado ao lado do endereço) e tente de novo.');
+    else setStatus('Não deu para ligar os avisos neste navegador. Tente de novo em instantes.');
+  };
+  return (
+    <>
+      <h3>Com o Nexo fechado</h3>
+      {support === 'desktop-app' ? (
+        <small className="muted">No app de computador, deixe "Fechar para a bandeja" ligado em Windows: o Nexo continua avisando com a janela fechada.</small>
+      ) : support === 'ios-install' ? (
+        <p className="warn-box">No iPhone, abra o Nexo no Safari, toque em Compartilhar e depois em "Adicionar à Tela de Início". Abra pelo ícone novo e ligue aqui.</p>
+      ) : support === 'unsupported' ? (
+        <small className="muted">Este navegador não recebe avisos com o site fechado.</small>
+      ) : (
+        <>
+          <Toggle
+            label="Avisar mesmo com o Nexo fechado"
+            hint="Mensagens diretas e quando te chamarem (ou todas, se escolher acima). Vale só para este aparelho."
+            checked={s.pushEnabled && s.desktopNotify !== 'off'}
+            onChange={(v) => void toggle(v)}
+          />
+          {s.pushEnabled && (
+            <Toggle
+              label="Esconder o texto da mensagem"
+              hint='O aviso mostra só "Nova mensagem". O modo streamer também esconde.'
+              checked={s.pushHideContent}
+              onChange={(v) => (set({ pushHideContent: v }), void syncPush())}
+            />
+          )}
+          {status && <small className="muted">{status}</small>}
+        </>
+      )}
     </>
   );
 }
@@ -373,7 +427,7 @@ export function StreamerSettings() {
     <>
       <h2>Modo streamer</h2>
       <p className="muted">Esconde informações pessoais quando você mostra a tela para os outros (em live ou transmitindo no Nexo).</p>
-      <Toggle label="Ligar o modo streamer" checked={s.streamerMode} onChange={(v) => set({ streamerMode: v })} />
+      <Toggle label="Ligar o modo streamer" checked={s.streamerMode} onChange={(v) => (set({ streamerMode: v }), void syncPush())} />
       <Toggle label="Ligar sozinho ao transmitir a tela" hint="Fica ativo só enquanto você está transmitindo." checked={s.streamerAuto} onChange={(v) => set({ streamerAuto: v })} />
       <h3>O que esconder</h3>
       <Toggle label="Links de convite" hint='"Convidar pessoas" copia o link sem mostrar na tela.' checked={s.streamerHideInvites} onChange={(v) => set({ streamerHideInvites: v })} />

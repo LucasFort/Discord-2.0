@@ -12,6 +12,7 @@ import {
   broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToChannel, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
 } from './gateway.js';
 import { TEMPLATES, TEMPLATE_IDS } from './templates.js';
+import { pushMessage, pushPublicKey, removeSubscription, saveSubscription } from './push.js';
 import { ALL_PERMS, CHANNEL_PERMS, channelWithOverwrites, guildPayload, P, permContext, type PermContext } from './permissions.js';
 
 /** Reação: um emoji (qualquer um, como no Discord). Recusa texto comum para ninguém "reagir" com palavras. */
@@ -547,6 +548,29 @@ export function registerRoutes(app: FastifyInstance) {
       return listMessages(channelId, before, limit);
     });
 
+    // ---------- Avisos com o Nexo fechado (Web Push) ----------
+    api.get('/api/push/key', async () => ({ key: await pushPublicKey() }));
+    api.post('/api/push/subscribe', async (req) => {
+      const body = z
+        .object({
+          subscription: z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) }),
+          mode: z.enum(['all', 'mentions']).default('mentions'),
+          hide_content: z.boolean().default(false),
+        })
+        .parse(req.body);
+      // Só serviços de aviso conhecidos (Chrome/Edge, Firefox, Safari/iPhone, Windows): o servidor não chama outros endereços.
+      const host = new URL(body.subscription.endpoint).hostname;
+      const known = /(^|\.)(fcm\.googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com)$/;
+      if (!body.subscription.endpoint.startsWith('https://') || !known.test(host)) throw Object.assign(new Error('Serviço de aviso não aceito'), { statusCode: 400 });
+      await saveSubscription(req.user.id, body.subscription, body.mode, body.hide_content);
+      return { ok: true };
+    });
+    api.post('/api/push/unsubscribe', async (req) => {
+      const { endpoint } = z.object({ endpoint: z.string().max(1000) }).parse(req.body);
+      await removeSubscription(req.user.id, endpoint);
+      return { ok: true };
+    });
+
     // Limite anti-spam: 20 mensagens a cada 10 segundos por usuário.
     const messageLimit = {
       config: { rateLimit: { max: 20, timeWindow: '10 seconds', keyGenerator: (req: { user?: { id: string }; ip: string }) => req.user?.id ?? req.ip } },
@@ -588,6 +612,7 @@ export function registerRoutes(app: FastifyInstance) {
         );
       const msg = (await getMessage(id))!;
       await sendToChannel(ch, 'MESSAGE_CREATE', msg, ctx);
+      pushMessage(ch, msg, ctx).catch((e) => req.log.warn(e, 'push'));
       return msg;
     });
 

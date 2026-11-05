@@ -110,6 +110,19 @@ CREATE TABLE IF NOT EXISTS invites (
   max_uses INTEGER,
   expires_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'mentions',
+  hide_content INTEGER NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 async function postgresDriver(url: string): Promise<Driver> {

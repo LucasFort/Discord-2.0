@@ -6,6 +6,7 @@ import {
   ChevronDown, DoorOpen, Music, MessageCircle, Check, Lock,
 } from 'lucide-react';
 import { can, canAny, MANAGE_ANY, nameColor, outranks, P } from './permissions';
+import { disablePush, initPush } from './push';
 import { addFriend, DmProfilePanel, dmGuilds, dmText, dmVoice, FriendsView, HomeSidebar, homeBadge, openDm } from './friends';
 import { DjTile, MusicMiniPlayer, MusicPanel, OPEN_MUSIC_EVENT } from './music';
 import { api, API_MISSING, APP_NAME, dmOther, getToken, isDm, ownsGuild, setToken, type Channel, type Guild, type Message, type User } from './api';
@@ -42,6 +43,7 @@ const isPrivate = (c: Channel) => !!c.overwrites?.some((o) => o.id === c.guild_i
 export function App() {
   const [authed, setAuthed] = useState(!!getToken());
   const logout = useCallback(() => {
+    void disablePush();
     setToken(null);
     setAuthed(false);
   }, []);
@@ -214,6 +216,24 @@ function Main({ onLogout }: { onLogout: () => void }) {
       history.replaceState(null, '', '/');
       setCreateOpen({ start: 'join', invite: m[1] });
     }
+  }, [state.ready]);
+  // Clicou num aviso (notificação) de mensagem: abre o canal dela. Vem como /?canal=ID.
+  const openFromUrl = useRef<(url: string) => void>(() => {});
+  openFromUrl.current = (url: string) => {
+    const id = new URL(url, location.origin).searchParams.get('canal');
+    const g = id && state.guilds.find((x) => x.channels.some((c) => c.id === id));
+    if (!g || !id) return;
+    setGuildId(g.id);
+    setChannelId(id);
+    setView('text');
+  };
+  useEffect(() => {
+    if (!state.ready) return;
+    if (location.search.includes('canal=')) {
+      openFromUrl.current(location.href);
+      history.replaceState(null, '', '/');
+    }
+    initPush((url) => openFromUrl.current(url));
   }, [state.ready]);
   // Clicou "Entrar"/"Abrir" num cartão de convite do chat.
   useEffect(() => {
