@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LocalVideoTrack, RemoteVideoTrack, type Track } from 'livekit-client';
 import {
-  Activity, Bell, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
+  Activity, Bell, Menu, Settings as SettingsIcon, BellOff, Expand, SmilePlus, Hash, Headphones, HeadphoneOff, LogIn, LogOut, Maximize, Mic, MicOff, MonitorUp, MonitorX, Pencil,
   PhoneOff, Plus, Radio, SlidersHorizontal, Trash2, UserPlus, Users, Video, VideoOff, Volume2, VolumeX, X, ArrowRightLeft, ShieldAlert,
   ChevronDown, DoorOpen, Music, MessageCircle, Check, Lock,
 } from 'lucide-react';
@@ -208,6 +208,33 @@ function Main({ onLogout }: { onLogout: () => void }) {
   }, [state.guilds, voice.channelId]);
   const textChannel = guild?.channels.find((c) => c.id === channelId && c.type === 'text') ?? guild?.channels.find((c) => c.type === 'text');
 
+  // Celular: uma tela por vez. A navegação (servidores e canais) ou o conteúdo; a lista de membros abre por cima.
+  // Arrastar para a direita abre a navegação, para a esquerda abre os membros (como no Discord do celular).
+  const [mobileNav, setMobileNav] = useState(true);
+  const [mobileMembers, setMobileMembers] = useState(false);
+  const touch = useRef<{ x: number; y: number; t: number } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    // Não atrapalha quem arrasta um controle deslizante ou rola uma lista na horizontal.
+    const el = e.target as HTMLElement;
+    touch.current = el.closest('input, textarea, .strip, .emoji-grid, .settings-nav') ? null : { x: t.clientX, y: t.clientY, t: Date.now() };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = touch.current;
+    touch.current = null;
+    if (!start || window.innerWidth > 700) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6 || Date.now() - start.t > 600) return;
+    if (dx > 0) {
+      if (mobileMembers) setMobileMembers(false);
+      else setMobileNav(true);
+    } else if (mobileNav) setMobileNav(false);
+    else if (view === 'text') setMobileMembers(true);
+  };
+  useEffect(() => setMobileMembers(false), [guildId, channelId, view]);
+
   // Criar servidor / entrar com convite (tela própria em servers.tsx).
   const [createOpen, setCreateOpen] = useState<null | { start: 'pick' | 'join'; invite?: string }>(null);
   useEffect(() => {
@@ -231,6 +258,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
     setGuildId(g.id);
     setChannelId(id);
     setView('text');
+    setMobileNav(false);
   };
   useEffect(() => {
     if (!state.ready) return;
@@ -264,6 +292,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
     );
 
   const openChannel = (c: Channel) => {
+    setMobileNav(false);
     if (c.type === 'voice') {
       const g = state.guilds.find((x) => x.id === c.guild_id);
       if (voice.channelId !== c.id && !can(g, state.user!.id, P.CONNECT, c.id)) return void toast('Você não tem permissão para entrar neste canal de voz', 'error');
@@ -291,6 +320,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
 
   // Amigos e conversas diretas
   const showDm = (id: string) => {
+    setMobileNav(false);
     setGuildId(id);
     setChannelId(null);
     setView('text');
@@ -323,7 +353,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const unreadDms = dmGuilds(state).filter((g) => g.id !== dm?.id && dmText(g) && mentionCount(dmText(g)!.id) > 0);
 
   return (
-    <div className="app">
+    <div className={`app ${mobileNav ? 'm-nav' : 'm-main'} ${mobileMembers ? 'm-members' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <nav className="guilds">
         <button className={`guild home ${home ? 'active' : ''}`} title="Amigos e mensagens diretas" onClick={() => setGuildId(HOME)}>
           <img className="home-icon" src="/icon-192.png" alt="" />
@@ -362,7 +392,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             state={state}
             me={state.user}
             activeDm={dm?.id ?? null}
-            onFriends={() => (setGuildId(HOME), setView('text'))}
+            onFriends={() => (setGuildId(HOME), setView('text'), setMobileNav(false))}
             onOpenDm={showDm}
             presenceOf={presenceOf}
           />
@@ -427,6 +457,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
       </aside>
 
       <main className="content">
+        <button className="mobile-only mobile-menu icon" title="Servidores e canais" onClick={() => setMobileNav(true)}><Menu size={22} /></button>
         {view === 'voice' && voice.channelId ? (
           <VoiceView
             voice={voice}
@@ -455,6 +486,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
             dm={dmUser}
             group={group ? groupName(group, state.user!.id) : undefined}
             onCall={dm && dmVoice(dm) ? () => openChannel(dmVoice(dm)!) : undefined}
+            onMembers={dmUser ? undefined : () => setMobileMembers(true)}
           />
         ) : (
           <div className="empty">Nenhum canal de texto.</div>
@@ -469,6 +501,7 @@ function Main({ onLogout }: { onLogout: () => void }) {
           onAdd={() => addFriend({ user_id: dmUser.id }).catch((e) => toast(e.message, 'error'))}
         />
       )}
+      {mobileMembers && <div className="mobile-only mobile-backdrop" onClick={() => setMobileMembers(false)} />}
       {view === 'text' && group && (
         <GroupPanel group={group} state={state} me={state.user!} presenceOf={presenceOf} onLeft={() => setGuildId(HOME)} />
       )}
