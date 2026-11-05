@@ -1,5 +1,5 @@
 import webpush from 'web-push';
-import { all, get, getStatus, run, type Channel, type Message } from './db.js';
+import { all, blockedBy, get, getStatus, run, type Channel, type Message } from './db.js';
 import { isOnline } from './gateway.js';
 import { P, type PermContext } from './permissions.js';
 
@@ -69,10 +69,14 @@ export async function pushMessage(ch: Channel, msg: Message, ctx: NonNullable<Pe
   await vapid();
   const dndCache = new Map<string, boolean>();
   const text = msg.content.trim() || (msg.attachments?.length ? '📎 Enviou um arquivo' : '');
-  const title = ctx.isDm ? msg.author.display_name : `${msg.author.display_name} (#${ch.name}, ${ctx.guild.name})`;
+  const group = Number(ctx.guild.is_dm) === 2;
+  const title = group
+    ? `${msg.author.display_name} (${ctx.guild.name || 'grupo'})`
+    : ctx.isDm ? msg.author.display_name : `${msg.author.display_name} (#${ch.name}, ${ctx.guild.name})`;
   await Promise.all(
     subs.map(async (s) => {
       if (s.mode !== 'all' && !ctx.isDm && !mentions(msg, { id: s.user_id, username: s.username, display_name: s.display_name })) return;
+      if ((await blockedBy(s.user_id)).has(msg.author.id)) return;
       if (!dndCache.has(s.user_id)) dndCache.set(s.user_id, (await getStatus(s.user_id)) === 'dnd');
       if (dndCache.get(s.user_id)) return;
       const payload = Number(s.hide_content)

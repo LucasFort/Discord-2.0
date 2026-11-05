@@ -10,6 +10,11 @@ export const setDirectChannels = (ids: Iterable<string>) => void (directChannels
 export const addDirectChannels = (ids: Iterable<string>) => void (directChannels = new Set([...directChannels, ...ids]));
 export const isDirect = (channelId: string) => directChannels.has(channelId);
 
+/** Quem eu bloqueei: mensagens dessas pessoas não avisam nem tocam som. */
+let blocked = new Set<string>();
+export const setBlocked = (ids: Iterable<string>) => void (blocked = new Set(ids));
+export const isBlocked = (userId: string | undefined) => !!userId && blocked.has(userId);
+
 /** Pede permissão para avisos na área de trabalho (precisa vir de um clique). */
 export async function requestNotifyPermission() {
   if (typeof Notification === 'undefined') return 'unsupported' as const;

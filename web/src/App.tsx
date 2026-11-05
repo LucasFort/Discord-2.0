@@ -7,9 +7,9 @@ import {
 } from 'lucide-react';
 import { can, canAny, MANAGE_ANY, nameColor, outranks, P } from './permissions';
 import { disablePush, initPush } from './push';
-import { addFriend, DmProfilePanel, dmGuilds, dmText, dmVoice, FriendsView, HomeSidebar, homeBadge, openDm } from './friends';
+import { addFriend, DmProfilePanel, dmGuilds, dmText, dmVoice, FriendsView, GroupIcon, GroupPanel, HomeSidebar, homeBadge, openDm } from './friends';
 import { DjTile, MusicMiniPlayer, MusicPanel, OPEN_MUSIC_EVENT } from './music';
-import { api, API_MISSING, APP_NAME, dmOther, getToken, isDm, ownsGuild, setToken, type Channel, type Guild, type Message, type User } from './api';
+import { api, API_MISSING, APP_NAME, dmOther, getToken, groupName, isDm, isGroup, ownsGuild, setToken, type Channel, type Guild, type Message, type User } from './api';
 import { playSound, setSoundsEnabled, soundsEnabled } from './sounds';
 import { toast, useToasts } from './toast';
 import { useUpdateAvailable } from './update';
@@ -24,7 +24,7 @@ import { Splash } from './splash';
 import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { ServerSettings } from './ServerSettings';
 import { CreateServerModal, InviteModal } from './servers';
-import { mentionsMe } from './notify';
+import { mentionsMe, setBlocked } from './notify';
 import type { Presence } from './api';
 import {
   CALL_EMOJIS, CODECS, FPS_OPTIONS, RESOLUTIONS, shareBitrate, useVoice,
@@ -199,7 +199,8 @@ function Main({ onLogout }: { onLogout: () => void }) {
   const dm = isDm(selected) ? selected : undefined;
   const home = guildId === HOME || !!dm || (!selected && servers.length === 0);
   const guild = home ? dm : selected ?? servers[0];
-  const dmUser = dm && state.user ? dmOther(dm, state.user.id) : undefined;
+  const group = isGroup(dm) ? dm : undefined;
+  const dmUser = dm && !group && state.user ? dmOther(dm, state.user.id) : undefined;
   // Canal de voz apagado ou saí do servidor: sai da call.
   useEffect(() => {
     if (voice.channelId && state.ready && !state.guilds.some((g) => g.channels.some((c) => c.id === voice.channelId))) void voice.leave();
@@ -217,6 +218,10 @@ function Main({ onLogout }: { onLogout: () => void }) {
       setCreateOpen({ start: 'join', invite: m[1] });
     }
   }, [state.ready]);
+  // Pessoas bloqueadas não avisam nem tocam som.
+  useEffect(() => {
+    setBlocked(Object.values(state.relationships).filter((r) => r.type === 'blocked').map((r) => r.user.id));
+  }, [state.relationships]);
   // Clicou num aviso (notificação) de mensagem: abre o canal dela. Vem como /?canal=ID.
   const openFromUrl = useRef<(url: string) => void>(() => {});
   openFromUrl.current = (url: string) => {
@@ -279,7 +284,10 @@ function Main({ onLogout }: { onLogout: () => void }) {
   };
   const voiceGuild = state.guilds.find((g) => g.channels.some((c) => c.id === voice.channelId));
   const voiceChannel = voiceGuild?.channels.find((c) => c.id === voice.channelId);
-  const voiceName = voiceGuild && isDm(voiceGuild) ? `Chamada com ${dmOther(voiceGuild, state.user.id).display_name}` : voiceChannel?.name ?? 'Voz';
+  const voiceName =
+    voiceGuild && isGroup(voiceGuild) ? `Chamada em ${groupName(voiceGuild, state.user.id)}`
+    : voiceGuild && isDm(voiceGuild) ? `Chamada com ${dmOther(voiceGuild, state.user.id).display_name}`
+    : voiceChannel?.name ?? 'Voz';
 
   // Amigos e conversas diretas
   const showDm = (id: string) => {
@@ -325,8 +333,8 @@ function Main({ onLogout }: { onLogout: () => void }) {
           const other = dmOther(g, state.user!.id);
           const n = mentionCount(dmText(g)!.id);
           return (
-            <button key={g.id} className="guild has-icon dm-bubble" title={other.display_name} onClick={() => showDm(g.id)}>
-              <Avatar user={other} size={48} />
+            <button key={g.id} className="guild has-icon dm-bubble" title={isGroup(g) ? groupName(g, state.user!.id) : other.display_name} onClick={() => showDm(g.id)}>
+              {isGroup(g) ? <GroupIcon guild={g} size={48} /> : <Avatar user={other} size={48} />}
               <span className="count-badge">{n > 99 ? '99+' : n}</span>
             </button>
           );
@@ -445,7 +453,8 @@ function Main({ onLogout }: { onLogout: () => void }) {
             gateway={gateway}
             onOpenChannel={(id) => (setChannelId(id), setView('text'))}
             dm={dmUser}
-            onCall={dm && dmUser ? () => openChannel(dmVoice(dm)!) : undefined}
+            group={group ? groupName(group, state.user!.id) : undefined}
+            onCall={dm && dmVoice(dm) ? () => openChannel(dmVoice(dm)!) : undefined}
           />
         ) : (
           <div className="empty">Nenhum canal de texto.</div>
@@ -459,6 +468,9 @@ function Main({ onLogout }: { onLogout: () => void }) {
           relationship={state.relationships[dmUser.id]}
           onAdd={() => addFriend({ user_id: dmUser.id }).catch((e) => toast(e.message, 'error'))}
         />
+      )}
+      {view === 'text' && group && (
+        <GroupPanel group={group} state={state} me={state.user!} presenceOf={presenceOf} onLeft={() => setGuildId(HOME)} />
       )}
       {guild && !dm && view === 'text' && <MemberList guild={guild} presenceOf={presenceOf} />}
       {sideMenu && guild && (

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Check, Copy, MessageCircle, Phone, UserMinus, UserPlus, Users, X } from 'lucide-react';
-import { api, dmOther, isDm, type Guild, type Presence, type Relationship, type User } from './api';
+import { ask } from './ask';
+import { Ban, Check, Copy, Crown, LogOut, MessageCircle, Pencil, Phone, Plus, UserMinus, UserPlus, Users, X } from 'lucide-react';
+import { api, dmOther, groupName, isDm, isGroup, type Guild, type Presence, type Relationship, type User } from './api';
 import { Avatar, openProfile, ProfileBody } from './profile';
 import { isUnread, mentionCount, useUnreadVersion } from './unread';
 import { toast } from './toast';
@@ -57,6 +58,7 @@ export function HomeSidebar({ state, me, activeDm, onFriends, onOpenDm, presence
   useUnreadVersion();
   const pending = Object.values(state.relationships).filter((r) => r.type === 'incoming').length;
   const dms = dmGuilds(state);
+  const [groupOpen, setGroupOpen] = useState(false);
   return (
     <div className="channels">
       <header className="guild-header home-header">Conversas</header>
@@ -64,7 +66,11 @@ export function HomeSidebar({ state, me, activeDm, onFriends, onOpenDm, presence
         <span className="hash"><Users size={18} /></span> <span className="channel-name">Amigos</span>
         {pending > 0 && <span className="count-badge">{pending}</span>}
       </button>
-      <div className="section"><span>Mensagens diretas</span></div>
+      <div className="section">
+        <span>Mensagens diretas</span>
+        <button className="icon small" title="Criar grupo" onClick={() => setGroupOpen(true)}><Plus size={16} /></button>
+      </div>
+      {groupOpen && <GroupPicker state={state} me={me} onClose={() => setGroupOpen(false)} onDone={(g) => (setGroupOpen(false), onOpenDm(g.id))} />}
       {dms.length === 0 && <p className="muted dm-empty">Abra uma conversa pela lista de amigos.</p>}
       {dms.map((g) => {
         const other = dmOther(g, me.id);
@@ -72,6 +78,17 @@ export function HomeSidebar({ state, me, activeDm, onFriends, onOpenDm, presence
         const unread = !!text && g.id !== activeDm && isUnread(text.id, text.last_message_id);
         const count = text ? mentionCount(text.id) : 0;
         const inCall = Object.entries(state.voice).some(([uid, ch]) => uid !== me.id && ch === dmVoice(g)?.id);
+        if (isGroup(g))
+          return (
+            <button key={g.id} className={`channel dm-row ${g.id === activeDm ? 'active' : ''} ${unread ? 'unread' : ''}`} onClick={() => onOpenDm(g.id)}>
+              <GroupIcon guild={g} size={32} />
+              <span className="member-name">
+                <span>{groupName(g, me.id)}</span>
+                {inCall ? <small className="ok">Na chamada</small> : <small>{g.members.length} {g.members.length === 1 ? 'pessoa' : 'pessoas'}</small>}
+              </span>
+              {count > 0 && <span className="count-badge">{count > 99 ? '99+' : count}</span>}
+            </button>
+          );
         return (
           <button key={g.id} className={`channel dm-row ${g.id === activeDm ? 'active' : ''} ${unread ? 'unread' : ''}`} onClick={() => onOpenDm(g.id)}>
             <Avatar user={other} size={32} status={presenceOf(other.id)} />
@@ -88,7 +105,7 @@ export function HomeSidebar({ state, me, activeDm, onFriends, onOpenDm, presence
 }
 
 // ---------------------------------------------------------------- Lista de amigos
-type Tab = 'online' | 'all' | 'pending' | 'add';
+type Tab = 'online' | 'all' | 'pending' | 'blocked' | 'add';
 
 export function FriendsView({ state, presenceOf, onMessage, onCall }: {
   state: State;
@@ -98,16 +115,21 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
 }) {
   const rels = Object.values(state.relationships).sort((a, b) => a.user.display_name.localeCompare(b.user.display_name));
   const friends = rels.filter((r) => r.type === 'friend');
-  const pending = rels.filter((r) => r.type !== 'friend');
+  const pending = rels.filter((r) => r.type === 'incoming' || r.type === 'outgoing');
+  const blocked = rels.filter((r) => r.type === 'blocked');
   const incoming = pending.filter((r) => r.type === 'incoming').length;
   const [tab, setTab] = useState<Tab>(friends.length ? 'online' : incoming ? 'pending' : 'add');
 
-  const list = tab === 'online' ? friends.filter((r) => presenceOf(r.user.id) !== 'offline') : tab === 'all' ? friends : pending;
-  const title = tab === 'online' ? 'Online' : tab === 'all' ? 'Todos os amigos' : 'Pendentes';
+  const list = tab === 'online' ? friends.filter((r) => presenceOf(r.user.id) !== 'offline') : tab === 'all' ? friends : tab === 'blocked' ? blocked : pending;
+  const title = tab === 'online' ? 'Online' : tab === 'all' ? 'Todos os amigos' : tab === 'blocked' ? 'Bloqueados' : 'Pendentes';
 
   const remove = async (r: Relationship) => {
     if (r.type === 'friend' && !confirm(`Desfazer a amizade com ${r.user.display_name}?`)) return;
     await api('DELETE', `/relationships/${r.user.id}`).catch((e) => toast(e.message, 'error'));
+  };
+  const block = async (r: Relationship) => {
+    if (!confirm(`Bloquear ${r.user.display_name}? A amizade é desfeita, a pessoa não consegue te mandar mensagem direta nem pedido, e as mensagens dela ficam escondidas para você.`)) return;
+    await blockUser(r.user.id);
   };
   const accept = (r: Relationship) => api('PUT', `/relationships/${r.user.id}`).catch((e) => toast(e.message, 'error'));
 
@@ -121,6 +143,7 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
           <button className={tab === 'pending' ? 'on' : ''} onClick={() => setTab('pending')}>
             Pendentes {incoming > 0 && <span className="count-badge">{incoming}</span>}
           </button>
+          {blocked.length > 0 && <button className={tab === 'blocked' ? 'on' : ''} onClick={() => setTab('blocked')}>Bloqueados</button>}
           <button className={`add-friend ${tab === 'add' ? 'on' : ''}`} onClick={() => setTab('add')}>Adicionar amigo</button>
         </nav>
       </header>
@@ -131,8 +154,8 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
           <div className="section">{title} — {list.length}</div>
           {list.length === 0 && (
             <div className="friends-empty muted">
-              {tab === 'pending' ? 'Nenhum pedido de amizade por aqui.' : tab === 'online' ? 'Nenhum amigo online agora.' : 'Você ainda não tem amigos no Nexo.'}
-              {tab !== 'pending' && <button className="primary" onClick={() => setTab('add')}><UserPlus size={16} /> Adicionar amigo</button>}
+              {tab === 'blocked' ? 'Ninguém bloqueado.' : tab === 'pending' ? 'Nenhum pedido de amizade por aqui.' : tab === 'online' ? 'Nenhum amigo online agora.' : 'Você ainda não tem amigos no Nexo.'}
+              {(tab === 'online' || tab === 'all') && <button className="primary" onClick={() => setTab('add')}><UserPlus size={16} /> Adicionar amigo</button>}
             </div>
           )}
           {list.map((r) => {
@@ -140,6 +163,7 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
             const sub =
               r.type === 'incoming' ? 'Pedido de amizade recebido'
               : r.type === 'outgoing' ? 'Pedido de amizade enviado'
+              : r.type === 'blocked' ? 'Bloqueado'
               : r.user.custom_status || STATUS_TEXT[status];
             return (
               <div key={r.user.id} className="friend-row" onClick={(e) => r.type === 'friend' ? onMessage(r.user.id) : openProfile(r.user, e)}>
@@ -154,12 +178,15 @@ export function FriendsView({ state, presenceOf, onMessage, onCall }: {
                       <button className="icon" title="Mensagem" onClick={() => onMessage(r.user.id)}><MessageCircle size={18} /></button>
                       <button className="icon" title="Ligar" onClick={() => onCall(r.user.id)}><Phone size={18} /></button>
                       <button className="icon danger" title="Desfazer amizade" onClick={() => remove(r)}><UserMinus size={18} /></button>
+                      <button className="icon danger" title="Bloquear" onClick={() => block(r)}><Ban size={18} /></button>
                     </>
                   )}
+                  {r.type === 'blocked' && <button onClick={() => remove(r)}>Desbloquear</button>}
                   {r.type === 'incoming' && (
                     <>
                       <button className="icon accept" title="Aceitar" onClick={() => accept(r)}><Check size={18} /></button>
                       <button className="icon danger" title="Recusar" onClick={() => remove(r)}><X size={18} /></button>
+                      <button className="icon danger" title="Bloquear" onClick={() => block(r)}><Ban size={18} /></button>
                     </>
                   )}
                   {r.type === 'outgoing' && (
@@ -275,12 +302,172 @@ export function DmProfilePanel({ user, status, relationship, onAdd }: {
         <ProfileBody user={user} status={status} />
         {!relationship && <button className="profile-edit primary" onClick={onAdd}><UserPlus size={14} /> Adicionar amigo</button>}
         {relationship?.type === 'outgoing' && <p className="muted dm-note">Pedido de amizade enviado.</p>}
+        {relationship?.type === 'blocked' ? (
+          <>
+            <p className="muted dm-note">Você bloqueou essa pessoa.</p>
+            <button className="profile-edit" onClick={() => api('DELETE', `/relationships/${user.id}`).catch((e) => toast(e.message, 'error'))}>Desbloquear</button>
+          </>
+        ) : (
+          <button
+            className="profile-edit danger-text"
+            onClick={() => confirm(`Bloquear ${user.display_name}?`) && void blockUser(user.id)}
+          >
+            <Ban size={14} /> Bloquear
+          </button>
+        )}
         {relationship?.type === 'incoming' && (
           <button className="profile-edit primary" onClick={() => api('PUT', `/relationships/${user.id}`).catch((e) => toast(e.message, 'error'))}>
             <Check size={14} /> Aceitar pedido de amizade
           </button>
         )}
       </div>
+    </aside>
+  );
+}
+
+/** Bloqueia alguém (desfaz amizade e pedidos). */
+export async function blockUser(userId: string) {
+  try {
+    await api('PUT', `/relationships/${userId}/block`);
+    toast('Pessoa bloqueada');
+  } catch (e) {
+    toast((e as Error).message, 'error');
+  }
+}
+
+// ---------------------------------------------------------------- Grupos
+const GROUP_MAX = 10;
+
+/** Ícone do grupo: a imagem escolhida ou as iniciais de até duas pessoas. */
+export function GroupIcon({ guild, size }: { guild: Guild; size: number }) {
+  if (guild.icon) return <img className="group-icon" src={guild.icon} width={size} height={size} alt="" />;
+  return (
+    <span className="group-icon placeholder" style={{ width: size, height: size }}>
+      <Users size={Math.round(size * 0.55)} />
+    </span>
+  );
+}
+
+/** Escolher amigos: para criar um grupo novo ou adicionar a um grupo (exclude = quem já está). */
+export function GroupPicker({ state, me, group, onClose, onDone }: {
+  state: State;
+  me: User;
+  group?: Guild;
+  onClose: () => void;
+  onDone: (g: Guild) => void;
+}) {
+  const [filter, setFilter] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const inGroup = new Set(group?.members.map((m) => m.id) ?? []);
+  const room = GROUP_MAX - (group ? group.members.length : 1);
+  const friends = Object.values(state.relationships)
+    .filter((r) => r.type === 'friend' && !inGroup.has(r.user.id))
+    .map((r) => r.user)
+    .filter((u) => !filter || `${u.display_name} ${u.username}`.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name));
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= room ? p : [...p, id]));
+  const submit = async () => {
+    if (!picked.length) return;
+    setBusy(true);
+    try {
+      if (group) {
+        await api('POST', `/groups/${group.id}/members`, { user_ids: picked });
+        onDone(group);
+      } else if (picked.length === 1) {
+        const dm = await openDm(picked[0]);
+        if (dm) onDone(dm);
+      } else onDone(await api<Guild>('POST', '/groups', { user_ids: picked }));
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal group-picker" onClick={(e) => e.stopPropagation()}>
+        <button className="icon modal-x" title="Fechar" onClick={onClose}><X size={20} /></button>
+        <h2>{group ? 'Adicionar ao grupo' : 'Criar grupo'}</h2>
+        <p className="muted">
+          {room > 0 ? `Dá para escolher mais ${room - picked.length} ${room - picked.length === 1 ? 'amigo' : 'amigos'}.` : 'O grupo já está cheio (10 pessoas).'}
+        </p>
+        <input autoFocus placeholder="Buscar amigos" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <div className="group-picker-list">
+          {friends.length === 0 && <p className="muted">{filter ? 'Ninguém com esse nome.' : 'Nenhum amigo para adicionar.'}</p>}
+          {friends.map((u) => (
+            <label key={u.id} className={`group-pick ${picked.includes(u.id) ? 'on' : ''}`}>
+              <Avatar user={u} size={32} />
+              <span className="member-name"><span>{u.display_name}</span><small>@{u.username}</small></span>
+              <input type="checkbox" checked={picked.includes(u.id)} onChange={() => toggle(u.id)} />
+            </label>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancelar</button>
+          <button className="primary" disabled={!picked.length || busy} onClick={submit}>
+            {group ? 'Adicionar' : picked.length > 1 ? 'Criar grupo' : 'Abrir conversa'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Painel do lado do grupo: quem está, renomear, adicionar, tirar (quem criou) e sair. */
+export function GroupPanel({ group, state, me, presenceOf, onLeft }: {
+  group: Guild;
+  state: State;
+  me: User;
+  presenceOf: (id: string) => Presence;
+  onLeft: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const owner = group.owner_id === me.id;
+  const rename = async () => {
+    const name = await ask('Nome do grupo (deixe vazio para usar os nomes)', { value: group.name });
+    if (name === null) return;
+    await api('PATCH', `/groups/${group.id}`, { name }).catch((e) => toast(e.message, 'error'));
+  };
+  const kick = async (u: User) => {
+    if (!confirm(`Tirar ${u.display_name} do grupo?`)) return;
+    await api('DELETE', `/groups/${group.id}/members/${u.id}`).catch((e) => toast(e.message, 'error'));
+  };
+  const leave = async () => {
+    if (!confirm('Sair do grupo? Você só volta se alguém te adicionar de novo.')) return;
+    try {
+      await api('DELETE', `/groups/${group.id}/members/@me`);
+      onLeft();
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
+  const members = [...group.members].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  return (
+    <aside className="members group-panel">
+      <div className="group-panel-head">
+        <GroupIcon guild={group} size={64} />
+        <h3>{groupName(group, me.id)}</h3>
+        <div className="group-panel-actions">
+          <button onClick={rename}><Pencil size={14} /> Renomear</button>
+          <button className="primary" onClick={() => setAdding(true)} disabled={group.members.length >= GROUP_MAX}><UserPlus size={14} /> Adicionar</button>
+        </div>
+      </div>
+      <div className="section"><span>Membros — {members.length}</span></div>
+      {members.map((u) => (
+        <div key={u.id} className="member group-member" onClick={(e) => openProfile(u, e)}>
+          <Avatar user={u} size={32} status={presenceOf(u.id)} />
+          <span className="member-name">
+            <span>{u.display_name} {u.id === group.owner_id && <Crown size={12} className="owner-crown" />}</span>
+            {u.custom_status && <small>{u.custom_status}</small>}
+          </span>
+          {owner && u.id !== me.id && (
+            <button className="icon small danger" title="Tirar do grupo" onClick={(e) => (e.stopPropagation(), void kick(u))}><X size={14} /></button>
+          )}
+        </div>
+      ))}
+      <button className="group-leave danger-text" onClick={leave}><LogOut size={14} /> Sair do grupo</button>
+      {adding && <GroupPicker state={state} me={me} group={group} onClose={() => setAdding(false)} onDone={() => setAdding(false)} />}
     </aside>
   );
 }
