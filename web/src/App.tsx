@@ -1430,13 +1430,17 @@ function StreamStats({ track }: { track: Track }) {
     };
     const tick = async () => {
       if (track instanceof LocalVideoTrack) {
-        const s = (await track.getSenderStats())[0];
+        // Com camadas (simulcast) vem uma estatística por camada: mostra a maior e soma o envio.
+        const all = await track.getSenderStats();
+        const s = all.reduce<(typeof all)[number] | undefined>((a, b) => (!a || (b.frameWidth ?? 0) > (a.frameWidth ?? 0) ? b : a), undefined);
         if (!s) return;
+        const bytes = all.reduce((n, x) => n + (x.bytesSent ?? 0), 0);
         const reason = s.qualityLimitationReason;
-        const rate = prevSent && s.timestamp > prevSent.t ? mbps((s.bytesSent ?? 0) - prevSent.bytes, s.timestamp - prevSent.t) : '…';
-        prevSent = { t: s.timestamp, bytes: s.bytesSent ?? 0 };
+        const rate = prevSent && s.timestamp > prevSent.t ? mbps(bytes - prevSent.bytes, s.timestamp - prevSent.t) : '…';
+        prevSent = { t: s.timestamp, bytes };
+        const lowSent = all.length > 1 && all.some((x) => x !== s && (x.framesPerSecond ?? 0) > 0);
         setLines({
-          text: `Enviando ${s.frameWidth}×${s.frameHeight} · ${Math.round(s.framesPerSecond ?? 0)} fps · ${rate}`,
+          text: `Enviando ${s.frameWidth}×${s.frameHeight} · ${Math.round(s.framesPerSecond ?? 0)} fps · ${rate}${lowSent ? ' · + versão 720p' : ''}`,
           warn:
             reason === 'cpu' ? 'Limitado pela CPU: feche jogos/abas pesadas ou use 720p'
             : reason === 'bandwidth' && (s.framesPerSecond ?? 0) < 24 ? 'Limitado pela internet de upload: tente 720p ou 1080p 30 fps'

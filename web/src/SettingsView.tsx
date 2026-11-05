@@ -435,6 +435,12 @@ function StreamSettings() {
         ))}
       </div>
       <small className="muted">{CODECS[s.streamCodec].hint}</small>
+      <Toggle
+        label="Versão leve para quem tem internet fraca"
+        hint="Manda também uma cópia em 720p. Quem tem internet ruim recebe essa em vez de a transmissão travar; quem tem internet boa continua na qualidade cheia. Usa um pouco mais o seu PC."
+        checked={s.streamLayers}
+        onChange={(v) => updateSettings({ streamLayers: v })}
+      />
       <h3>Áudio e quem assiste</h3>
       <Toggle label="Transmitir o áudio junto" hint="Som do jogo, vídeo ou aba que você está mostrando." checked={s.streamAudio} onChange={(v) => updateSettings({ streamAudio: v })} />
       <Toggle
