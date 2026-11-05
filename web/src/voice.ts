@@ -11,6 +11,7 @@ import {
   RemoteAudioTrack,
   type LocalAudioTrack,
   type AudioCaptureOptions,
+  VideoPreset,
 } from 'livekit-client';
 import { MicProcessor, newAudioContext } from './mic';
 import { getSettings, micConstraints, onSettings, type Settings } from './settings';
@@ -99,6 +100,9 @@ export const CODECS: Record<ShareCodec, { label: string; hint: string }> = {
 };
 
 /** Taxa de bits para a resolução e o fps escolhidos (a nativa conta como 1440p). */
+/** Camada leve da transmissão (simulcast) para quem tem internet fraca. */
+const LOW_LAYER = new VideoPreset(1280, 720, 1_500_000, 30);
+
 export function shareBitrate(res: ShareResolution, fps: ShareFps) {
   const r = RESOLUTIONS[res];
   const px = r.width ? r.width * r.height : 2560 * 1440;
@@ -210,7 +214,10 @@ export function useVoice(gateway: Gateway) {
         serverRef.current = { mute: !!server_mute, deaf: !!server_deaf };
         setServer(serverRef.current);
         const room = new Room({
-          adaptiveStream: true,
+          // Pede a camada de vídeo pelo tamanho na tela, contando o dobro de pixels: a transmissão em
+          // destaque (ou tela cheia) vem sempre na qualidade cheia, e a 720p fica para quadradinhos
+          // pequenos e para quem a internet não aguenta (o servidor decide sozinho).
+          adaptiveStream: { pixelDensity: 2 },
           dynacast: true,
           // Voz: Opus com DTX (não manda nada no silêncio) e RED (redundância contra perda de pacotes).
           publishDefaults: { dtx: true, red: true, audioPreset: { maxBitrate: getSettings().voiceBitrate * 1000 } },
@@ -525,6 +532,7 @@ export function useVoice(gateway: Gateway) {
     if (!lp) return;
     const r = RESOLUTIONS[opts.resolution];
     const bitrate = shareBitrate(opts.resolution, opts.fps);
+    const layers = getSettings().streamLayers && opts.resolution !== '720';
     // App de computador novo no Windows 11: o som vem por fora, já sem as vozes da call.
     const useNative = opts.audio && getSettings().streamRemoveCall && (await nativeSystemAudioAvailable());
     await lp.setScreenShareEnabled(
@@ -551,8 +559,12 @@ export function useVoice(gateway: Gateway) {
         // Com VP9/AV1 vai uma cópia em H.264 junto para quem não consegue decodificar.
         videoCodec: opts.codec,
         backupCodec: opts.codec !== 'h264' ? { codec: 'h264' } : false,
-        // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
-        simulcast: false,
+        // Camadas: além da qualidade cheia, vai uma versão 720p 30 fps. O servidor da LiveKit manda a
+        // menor só para quem tem internet fraca (ou está vendo num quadradinho), em vez de a
+        // transmissão travar para essa pessoa. Quem tem internet boa continua na qualidade cheia, e se
+        // ninguém precisar da menor, ela nem é codificada (dynacast). Em 720p não precisa.
+        simulcast: layers,
+        screenShareSimulcastLayers: layers ? [LOW_LAYER] : undefined,
         screenShareEncoding: { maxBitrate: bitrate, maxFramerate: opts.fps, priority: 'high' },
         // Equilibrado: divide a perda entre resolução e fps.
         // Jogo/vídeo: segura o fps e reduz a resolução quando a internet ou a CPU não dão conta.
@@ -605,9 +617,14 @@ export function useVoice(gateway: Gateway) {
     const sender = track.sender;
     if (sender) {
       const params = sender.getParameters();
-      for (const e of params.encodings ?? []) {
-        e.maxBitrate = shareBitrate(opts.resolution, opts.fps);
-        e.maxFramerate = opts.fps;
+      // Com camadas, a de cima (menor redução) recebe a qualidade escolhida; a 720p só acompanha o fps.
+      const encs = params.encodings ?? [];
+      const top = Math.min(...encs.map((e) => e.scaleResolutionDownBy ?? 1));
+      for (const e of encs) {
+        if ((e.scaleResolutionDownBy ?? 1) === top) {
+          e.maxBitrate = shareBitrate(opts.resolution, opts.fps);
+          e.maxFramerate = opts.fps;
+        } else e.maxFramerate = Math.min(opts.fps, 30);
       }
       (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
         opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate';

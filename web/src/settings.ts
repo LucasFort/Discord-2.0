@@ -40,6 +40,7 @@ export type Settings = {
   streamCodec: 'h264' | 'vp9' | 'av1';
   autoWatchStreams: boolean; // começa a assistir sozinho quando alguém transmite
   streamRemoveCall: boolean; // tira a voz da call do som da transmissão (eco de quem assiste)
+  streamLayers: boolean; // manda também uma versão 720p para quem tem internet fraca (simulcast)
   streamVolumes: Record<string, number>; // id de quem transmite -> 0–100 (%) do áudio da transmissão
   // Aparência e acessibilidade
   theme: 'dark' | 'midnight' | 'light' | 'system';
@@ -108,6 +109,7 @@ const DEFAULTS: Settings = {
   streamCodec: 'h264',
   autoWatchStreams: false,
   streamRemoveCall: true,
+  streamLayers: true,
   streamVolumes: {},
   theme: 'dark',
   messageDisplay: 'cozy',
@@ -165,7 +167,7 @@ export const getSettings = () => current;
 
 /** Volta as opções de voz para o padrão, sem mexer em volumes de pessoas, transmissão e sons. */
 export function resetVoiceSettings() {
-  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'soundPack', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams', 'streamRemoveCall'];
+  const keep: (keyof Settings)[] = ['userVolumes', 'streamVolumes', 'soundVolume', 'soundsOff', 'soundPack', 'streamResolution', 'streamFps', 'streamOptimize', 'streamAudio', 'streamCodec', 'autoWatchStreams', 'streamRemoveCall', 'streamLayers'];
   const next = { ...DEFAULTS } as Record<string, unknown>;
   for (const k of keep) next[k] = current[k];
   updateSettings(next as Partial<Settings>);
