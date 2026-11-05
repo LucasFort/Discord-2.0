@@ -3,7 +3,7 @@ import { playSound } from './sounds';
 import { checkForUpdate } from './update';
 import { gatewayUrl, getToken, type Channel, type Guild, type Message, type Presence, type Relationship, type User, type UserStatus } from './api';
 import { startIdleWatch } from './activity';
-import { addDirectChannels, notifyMessage, setDirectChannels, setMe } from './notify';
+import { addDirectChannels, isBlocked, notifyMessage, setDirectChannels, setMe } from './notify';
 import { noteMessage } from './unread';
 import { toast } from './toast';
 
@@ -329,7 +329,7 @@ export function useStore(onUnauthorized: () => void) {
           }
           // Mensagem nova de outra pessoa: som com a aba em segundo plano e aviso na área de trabalho.
           // "Não perturbe" silencia os dois, como no Discord.
-          if (msg.t === 'MESSAGE_CREATE' && msg.d.author?.id !== meRef.current && statusRef.current !== 'dnd') {
+          if (msg.t === 'MESSAGE_CREATE' && msg.d.author?.id !== meRef.current && statusRef.current !== 'dnd' && !isBlocked(msg.d.author?.id)) {
             if (document.hidden) playSound('message');
             notifyMessage(msg.d);
           }

@@ -6,12 +6,13 @@ import { requireAuth, signSession } from './auth.js';
 import { musicSearchEnabled, searchYouTube } from './music.js';
 import {
   get, run, newId, inviteCode, getChannel, getGuild, getMessage, guildsOf, isMember, listMessages, getUser, memberIds,
-  pinnedMessages, searchMessages, relationshipsOf, relationshipType, findDm, channelsOf, DEFAULT_EVERYONE_PERMS, type Channel,
+  pinnedMessages, searchMessages, relationshipsOf, relationshipType, findDm, eitherBlocked, channelsOf, DEFAULT_EVERYONE_PERMS, type Channel,
 } from './db.js';
 import {
   broadcastUserUpdate, getServerMod, presenceOf, presencesOf, sendToChannel, sendToGuild, sendToUser, setServerMod, setUserStatus, setVoiceState, voiceStateOf,
 } from './gateway.js';
 import { TEMPLATES, TEMPLATE_IDS } from './templates.js';
+import { pushMessage, pushPublicKey, removeSubscription, saveSubscription } from './push.js';
 import { ALL_PERMS, CHANNEL_PERMS, channelWithOverwrites, guildPayload, P, permContext, type PermContext } from './permissions.js';
 
 /** Reação: um emoji (qualquer um, como no Discord). Recusa texto comum para ninguém "reagir" com palavras. */
@@ -459,6 +460,8 @@ export function registerRoutes(app: FastifyInstance) {
         if (!other) return reply.code(404).send({ error: 'Ninguém com esse nome de usuário. Confira se digitou certinho.' });
         if (other.id === req.user.id) return reply.code(400).send({ error: 'Você não pode adicionar você mesmo' });
         const mine = await relationshipType(req.user.id, other.id);
+        if (mine === 'blocked') return reply.code(400).send({ error: 'Você bloqueou essa pessoa. Desbloqueie em Amigos → Bloqueados para mandar o pedido.' });
+        if ((await relationshipType(other.id, req.user.id)) === 'blocked') return reply.code(400).send({ error: 'Não foi possível mandar o pedido para essa pessoa.' });
         if (mine === 'friend') return reply.code(400).send({ error: 'Vocês já são amigos' });
         if (mine === 'outgoing') return reply.code(400).send({ error: 'Pedido já enviado, esperando a resposta' });
         if (mine === 'incoming') {
@@ -484,12 +487,25 @@ export function registerRoutes(app: FastifyInstance) {
       return { type: 'friend' };
     });
 
-    // Recusar, cancelar o pedido ou desfazer a amizade (some para os dois lados).
+    // Recusar, cancelar o pedido, desfazer a amizade (some para os dois lados) ou desbloquear
+    // (só tira o meu bloqueio; o da outra pessoa continua).
     api.delete('/api/relationships/:id', async (req) => {
       const { id } = req.params as { id: string };
       await run('DELETE FROM relationships WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)', req.user.id, id, id, req.user.id);
+      await run('DELETE FROM blocks WHERE user_id = ? AND other_id = ?', req.user.id, id);
       await relationshipChanged(req.user.id, id);
       return { ok: true };
+    });
+
+    // Bloquear: desfaz a amizade ou o pedido, a pessoa não consegue mais mandar pedido nem mensagem direta,
+    // e as mensagens dela aparecem escondidas para quem bloqueou.
+    api.put('/api/relationships/:id/block', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (id === req.user.id || !(await getUser(id))) return reply.code(404).send({ error: 'Pessoa não encontrada' });
+      await run('DELETE FROM relationships WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)', req.user.id, id, id, req.user.id);
+      await run('INSERT INTO blocks (user_id, other_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', req.user.id, id, Date.now());
+      await relationshipChanged(req.user.id, id);
+      return { type: 'blocked' };
     });
 
     // Conversa direta = um "servidor" escondido com as duas pessoas, um canal de texto e um de voz.
@@ -500,6 +516,7 @@ export function registerRoutes(app: FastifyInstance) {
       let guildId = await findDm(req.user.id, userId);
       const created = !guildId;
       if (!guildId) {
+        if (await eitherBlocked(req.user.id, userId)) return reply.code(403).send({ error: 'Não dá para conversar com essa pessoa' });
         if ((await relationshipType(req.user.id, userId)) !== 'friend')
           return reply.code(403).send({ error: 'Só dá para começar uma conversa direta com amigos' });
         guildId = newId();
@@ -515,6 +532,86 @@ export function registerRoutes(app: FastifyInstance) {
       const payload = withPresence(await guildPayload(guild, req.user.id));
       if (created) for (const id of [req.user.id, userId]) sendToUser(id, 'GUILD_CREATE', withPresence(await guildPayload(guild, id)));
       return payload;
+    });
+
+    // ---------- Grupos (conversa direta com até 10 pessoas) ----------
+    // Mesmo "servidor escondido" das DMs, com is_dm = 2. Qualquer pessoa do grupo renomeia e adiciona amigos dela;
+    // o dono (quem criou) pode tirar gente. Quem sai passa a ser removido; se o dono sai, o próximo vira dono.
+    const GROUP_MAX = 10;
+    const groupOf = async (id: string) => {
+      const g = await getGuild(id);
+      return g && Number(g.is_dm) === 2 ? g : undefined;
+    };
+    const sendGroup = async (guildId: string) => {
+      const g = (await getGuild(guildId))!;
+      for (const id of await memberIds(guildId)) sendToUser(id, 'GUILD_CREATE', withPresence(await guildPayload(g, id)));
+    };
+    const canAddToGroup = async (me: string, other: string) =>
+      (await relationshipType(me, other)) === 'friend' && !(await eitherBlocked(me, other));
+
+    api.post('/api/groups', async (req, reply) => {
+      const body = z.object({ user_ids: z.array(z.string().max(40)).min(1).max(GROUP_MAX - 1), name: z.string().trim().max(64).optional() }).parse(req.body);
+      const ids = [...new Set(body.user_ids.filter((id) => id !== req.user.id))];
+      // Com uma pessoa só é a conversa direta normal (POST /api/dms/:userId).
+      if (ids.length < 2) return reply.code(400).send({ error: 'Escolha pelo menos dois amigos para criar um grupo' });
+      for (const id of ids) if (!(await canAddToGroup(req.user.id, id))) return reply.code(403).send({ error: 'Só dá para colocar amigos no grupo' });
+      const guildId = newId();
+      const now = Date.now();
+      await run('INSERT INTO guilds (id, name, owner_id, created_at, is_dm) VALUES (?, ?, ?, ?, 2)', guildId, body.name ?? '', req.user.id, now);
+      for (const id of [req.user.id, ...ids]) await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', guildId, id, now);
+      const ins = 'INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, ?, ?, ?)';
+      await run(ins, newId(), guildId, 'conversa', 'text', 0);
+      await run(ins, newId(), guildId, 'Chamada', 'voice', 0);
+      await sendGroup(guildId);
+      return withPresence(await guildPayload((await getGuild(guildId))!, req.user.id));
+    });
+
+    api.patch('/api/groups/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const g = await groupOf(id);
+      if (!g || !(await isMember(id, req.user.id))) return reply.code(404).send({ error: 'Grupo não encontrado' });
+      const body = z.object({ name: z.string().trim().max(64).optional(), icon: z.string().max(400_000).nullable().optional() }).parse(req.body);
+      if (body.icon && !/^data:image\/(png|jpeg|webp|gif);base64,/.test(body.icon)) return reply.code(400).send({ error: 'Imagem inválida' });
+      if (body.name !== undefined) await run('UPDATE guilds SET name = ? WHERE id = ?', body.name, id);
+      if (body.icon !== undefined) await run('UPDATE guilds SET icon = ? WHERE id = ?', body.icon, id);
+      const updated = (await getGuild(id))!;
+      await sendToGuild(id, 'GUILD_UPDATE', updated);
+      return updated;
+    });
+
+    api.post('/api/groups/:id/members', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const g = await groupOf(id);
+      if (!g || !(await isMember(id, req.user.id))) return reply.code(404).send({ error: 'Grupo não encontrado' });
+      const { user_ids } = z.object({ user_ids: z.array(z.string().max(40)).min(1).max(GROUP_MAX) }).parse(req.body);
+      const current = await memberIds(id);
+      const add = [...new Set(user_ids)].filter((u) => !current.includes(u));
+      if (current.length + add.length > GROUP_MAX) return reply.code(400).send({ error: `O grupo pode ter no máximo ${GROUP_MAX} pessoas` });
+      for (const u of add) if (!(await canAddToGroup(req.user.id, u))) return reply.code(403).send({ error: 'Só dá para adicionar amigos seus' });
+      const now = Date.now();
+      for (const u of add) {
+        await run('INSERT INTO members (guild_id, user_id, joined_at) VALUES (?, ?, ?)', id, u, now);
+        const user = await getUser(u);
+        await sendToGuild(id, 'GUILD_MEMBER_ADD', { guild_id: id, user, status: presenceOf(u) });
+      }
+      for (const u of add) sendToUser(u, 'GUILD_CREATE', withPresence(await guildPayload(g, u)));
+      return { ok: true };
+    });
+
+    api.delete('/api/groups/:id/members/:userId', async (req, reply) => {
+      const { id, userId: rawId } = req.params as { id: string; userId: string };
+      const userId = rawId === '@me' ? req.user.id : rawId;
+      const g = await groupOf(id);
+      if (!g || !(await isMember(id, userId)) || !(await isMember(id, req.user.id))) return reply.code(404).send({ error: 'Essa pessoa não está no grupo' });
+      if (userId !== req.user.id && g.owner_id !== req.user.id) return reply.code(403).send({ error: 'Só quem criou o grupo pode tirar pessoas' });
+      await removeMember(id, userId);
+      const left = await memberIds(id);
+      if (!left.length) await run('DELETE FROM guilds WHERE id = ?', id);
+      else if (g.owner_id === userId) {
+        await run('UPDATE guilds SET owner_id = ? WHERE id = ?', left[0], id);
+        await sendToGuild(id, 'GUILD_UPDATE', (await getGuild(id))!);
+      }
+      return { ok: true };
     });
 
     // ---------- Canais ----------
@@ -547,6 +644,29 @@ export function registerRoutes(app: FastifyInstance) {
       return listMessages(channelId, before, limit);
     });
 
+    // ---------- Avisos com o Nexo fechado (Web Push) ----------
+    api.get('/api/push/key', async () => ({ key: await pushPublicKey() }));
+    api.post('/api/push/subscribe', async (req) => {
+      const body = z
+        .object({
+          subscription: z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) }),
+          mode: z.enum(['all', 'mentions']).default('mentions'),
+          hide_content: z.boolean().default(false),
+        })
+        .parse(req.body);
+      // Só serviços de aviso conhecidos (Chrome/Edge, Firefox, Safari/iPhone, Windows): o servidor não chama outros endereços.
+      const host = new URL(body.subscription.endpoint).hostname;
+      const known = /(^|\.)(fcm\.googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com)$/;
+      if (!body.subscription.endpoint.startsWith('https://') || !known.test(host)) throw Object.assign(new Error('Serviço de aviso não aceito'), { statusCode: 400 });
+      await saveSubscription(req.user.id, body.subscription, body.mode, body.hide_content);
+      return { ok: true };
+    });
+    api.post('/api/push/unsubscribe', async (req) => {
+      const { endpoint } = z.object({ endpoint: z.string().max(1000) }).parse(req.body);
+      await removeSubscription(req.user.id, endpoint);
+      return { ok: true };
+    });
+
     // Limite anti-spam: 20 mensagens a cada 10 segundos por usuário.
     const messageLimit = {
       config: { rateLimit: { max: 20, timeWindow: '10 seconds', keyGenerator: (req: { user?: { id: string }; ip: string }) => req.user?.id ?? req.ip } },
@@ -558,6 +678,11 @@ export function registerRoutes(app: FastifyInstance) {
       const ctx = ch && (await permContext(ch.guild_id));
       if (!ch || !ctx || ch.type !== 'text' || !ctx.can(req.user.id, P.VIEW_CHANNEL, ch.id)) return reply.code(403).send({ error: 'Sem acesso' });
       if (!ctx.can(req.user.id, P.SEND_MESSAGES, ch.id)) return reply.code(403).send({ error: 'Você não tem permissão para mandar mensagens neste canal' });
+      if (Number(ctx.guild.is_dm) === 1) {
+        const other = [...ctx.members].find((id) => id !== req.user.id);
+        if (other && (await eitherBlocked(req.user.id, other)))
+          return reply.code(403).send({ error: 'Não dá para mandar mensagem: uma das pessoas bloqueou a outra.' });
+      }
       const body = z
         .object({
           content: z.string().trim().max(4000).default(''),
@@ -588,6 +713,7 @@ export function registerRoutes(app: FastifyInstance) {
         );
       const msg = (await getMessage(id))!;
       await sendToChannel(ch, 'MESSAGE_CREATE', msg, ctx);
+      pushMessage(ch, msg, ctx).catch((e) => req.log.warn(e, 'push'));
       return msg;
     });
 

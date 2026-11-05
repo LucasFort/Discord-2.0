@@ -110,6 +110,25 @@ CREATE TABLE IF NOT EXISTS invites (
   max_uses INTEGER,
   expires_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS blocks (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  other_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, other_id)
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'mentions',
+  hide_content INTEGER NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 async function postgresDriver(url: string): Promise<Driver> {
@@ -368,22 +387,36 @@ export async function listMessages(channelId: string, before: string | undefined
 }
 
 // ---------- Amigos ----------
-export type RelationshipType = 'friend' | 'outgoing' | 'incoming';
+export type RelationshipType = 'friend' | 'outgoing' | 'incoming' | 'blocked';
 export type Relationship = { user: User; type: RelationshipType };
 
-/** Amigos e pedidos de amizade (enviados e recebidos) de uma pessoa. */
+/** Amigos, pedidos de amizade (enviados e recebidos) e bloqueados de uma pessoa. */
 export async function relationshipsOf(userId: string): Promise<Relationship[]> {
   const rows = await all(
-    `SELECT r.type, ${USER_COLS} FROM relationships r JOIN users u ON u.id = r.other_id WHERE r.user_id = ? ORDER BY lower(u.display_name)`,
-    userId,
+    `SELECT r.type, ${USER_COLS} FROM relationships r JOIN users u ON u.id = r.other_id WHERE r.user_id = ?
+     UNION ALL
+     SELECT 'blocked' AS type, ${USER_COLS} FROM blocks b JOIN users u ON u.id = b.other_id WHERE b.user_id = ?`,
+    userId, userId,
   );
   return rows.map(({ type, ...user }) => ({ type, user: user as User }));
 }
-export const relationshipType = async (userId: string, otherId: string) =>
-  ((await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', userId, otherId)) as { type: RelationshipType } | undefined)?.type;
+export const relationshipType = async (userId: string, otherId: string): Promise<RelationshipType | undefined> =>
+  (await get('SELECT 1 AS ok FROM blocks WHERE user_id = ? AND other_id = ?', userId, otherId))
+    ? 'blocked'
+    : ((await get('SELECT type FROM relationships WHERE user_id = ? AND other_id = ?', userId, otherId)) as { type: RelationshipType } | undefined)?.type;
 /** Todo mundo com quem a pessoa tem amizade ou pedido pendente (recebe presença e mudanças de perfil). */
 export const relationshipIds = async (userId: string) =>
   (await all('SELECT other_id FROM relationships WHERE user_id = ?', userId)).map((r) => r.other_id as string);
+
+/** Alguma das duas pessoas bloqueou a outra. */
+export const eitherBlocked = async (a: string, b: string) =>
+  !!(await get(
+    'SELECT 1 AS ok FROM blocks WHERE (user_id = ? AND other_id = ?) OR (user_id = ? AND other_id = ?)',
+    a, b, b, a,
+  ));
+/** Quem esta pessoa bloqueou. */
+export const blockedBy = async (userId: string) =>
+  new Set((await all('SELECT other_id FROM blocks WHERE user_id = ?', userId)).map((r) => r.other_id as string));
 
 /** Conversa direta já existente entre duas pessoas. */
 export const findDm = async (a: string, b: string) =>

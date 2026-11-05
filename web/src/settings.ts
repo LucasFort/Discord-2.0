@@ -59,6 +59,8 @@ export type Settings = {
   sendOnEnter: boolean;
   // Notificações e status
   desktopNotify: 'all' | 'mentions' | 'off';
+  pushEnabled: boolean; // avisos com o Nexo fechado (Web Push) neste aparelho
+  pushHideContent: boolean; // o aviso não mostra o texto da mensagem
   autoIdle: boolean; // "Ausente" sozinho depois de 10 minutos parado
   // Modo streamer: esconde informações pessoais quando estiver transmitindo
   streamerMode: boolean;
@@ -124,6 +126,8 @@ const DEFAULTS: Settings = {
   showLinks: true,
   sendOnEnter: true,
   desktopNotify: 'mentions',
+  pushEnabled: false,
+  pushHideContent: false,
   autoIdle: true,
   streamerMode: false,
   streamerAuto: false,

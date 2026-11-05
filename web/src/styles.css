@@ -867,3 +867,28 @@ button.sent { background: none; color: var(--text-muted); padding: 6px 14px; }
 .suggest-card button { margin-top: 4px; width: 100%; padding: 7px 10px; }
 .suggest-avatar { cursor: pointer; }
 @media (max-width: 520px) { .invite-edit { grid-template-columns: 1fr; } }
+
+/* ---------- Grupos e bloqueio ---------- */
+.group-icon { border-radius: 50%; object-fit: cover; flex: none; }
+.group-icon.placeholder { display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #7c5cff, #2bb6a3); color: white; }
+.section .icon.small { width: 22px; height: 22px; padding: 0; }
+.group-picker { width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+.group-picker h2 { margin: 0; }
+.group-picker p { margin: 0; }
+.group-picker-list { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; }
+.group-pick { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.group-pick:hover, .group-pick.on { background: var(--bg-3, rgba(255,255,255,.06)); }
+.group-pick .member-name { flex: 1; min-width: 0; }
+.group-pick input { width: 18px; height: 18px; accent-color: #7c5cff; }
+.group-panel { display: flex; flex-direction: column; }
+.group-panel-head { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 20px 12px 8px; text-align: center; }
+.group-panel-head h3 { margin: 0; font-size: 16px; word-break: break-word; }
+.group-panel-actions { display: flex; gap: 6px; }
+.group-panel-actions button { font-size: 12px; padding: 6px 10px; display: inline-flex; align-items: center; gap: 4px; }
+.group-member .member-name { flex: 1; min-width: 0; }
+.group-member .icon.small { opacity: 0; }
+.group-member:hover .icon.small { opacity: 1; }
+.owner-crown { color: #f0b232; vertical-align: -1px; }
+.group-leave { margin: 12px 8px 16px; background: transparent; border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.blocked-msg { display: flex; align-items: center; gap: 8px; margin: 4px 16px; padding: 6px 10px; border-radius: 8px; font-size: 13px; color: var(--text-muted); background: rgba(255,255,255,.03); }
+.blocked-msg .link { background: none; border: 0; padding: 0; color: var(--accent, #8b7bff); cursor: pointer; font-size: 13px; }

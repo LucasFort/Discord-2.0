@@ -31,8 +31,18 @@ export const isDm = (g: Pick<Guild, 'is_dm'> | undefined) => !!g && !!Number(g.i
 export const ownsGuild = (g: Pick<Guild, 'is_dm' | 'owner_id'> | undefined, userId: string | undefined) => !!g && !isDm(g) && g.owner_id === userId;
 /** A outra pessoa de uma conversa direta. */
 export const dmOther = (g: Guild, meId: string) => g.members.find((m) => m.id !== meId) ?? g.members[0];
-/** Amizade ou pedido pendente: "outgoing" = eu pedi, "incoming" = me pediram. */
-export type Relationship = { user: User; type: 'friend' | 'outgoing' | 'incoming' };
+/** Grupo: conversa direta com mais gente (is_dm = 2). */
+export const isGroup = (g: Pick<Guild, 'is_dm'> | undefined) => !!g && Number(g.is_dm ?? 0) === 2;
+/** Nome do grupo: o que deram para ele ou os nomes das outras pessoas. */
+export const groupName = (g: Guild, meId: string) =>
+  g.name ||
+  g.members
+    .filter((m) => m.id !== meId)
+    .map((m) => m.display_name)
+    .join(', ') ||
+  'Grupo vazio';
+/** Amizade, pedido pendente ou bloqueio: "outgoing" = eu pedi, "incoming" = me pediram, "blocked" = eu bloqueei. */
+export type Relationship = { user: User; type: 'friend' | 'outgoing' | 'incoming' | 'blocked' };
 export type Message = {
   id: string;
   channel_id: string;

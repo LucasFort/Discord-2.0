@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AtSign, CornerUpLeft, File as FileIcon, Hash, Phone, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
+import { AtSign, Ban, Users, CornerUpLeft, File as FileIcon, Hash, Phone, Music, Pencil, Pin, PinOff, PlusCircle, Search, Smile, SmilePlus, Trash2, X } from 'lucide-react';
 import { can, nameColor, P } from './permissions';
 import { InviteEmbed } from './servers';
 
@@ -60,11 +60,13 @@ export function Chat(props: {
   gateway: Gateway;
   onOpenChannel: (id: string) => void;
   dm?: User; // conversa direta: a outra pessoa (o topo e os textos mostram o nome dela)
+  group?: string; // grupo: o nome dele
   onCall?: () => void;
 }) {
-  const { channel, guild, state, dispatch, gateway, onOpenChannel, dm, onCall } = props;
+  const { channel, guild, state, dispatch, gateway, onOpenChannel, dm, group, onCall } = props;
   const messages = state.messages[channel.id];
   const me = state.user!;
+  const [shownBlocked, setShownBlocked] = useState<Set<string>>(new Set());
   const members = guild.members;
   const canSend = can(guild, me.id, P.SEND_MESSAGES, channel.id);
   const canAttach = canSend && can(guild, me.id, P.ATTACH_FILES, channel.id);
@@ -160,7 +162,13 @@ export function Chat(props: {
       }}
     >
       <header className="topbar">
-        {dm ? (
+        {group ? (
+          <>
+            <span className="hash"><Users size={20} /></span>
+            <span className="dm-title">{group}</span>
+            <span className="topic">{guild.members.length} pessoas</span>
+          </>
+        ) : dm ? (
           <>
             <span className="hash"><AtSign size={20} /></span>
             <span className="dm-title" onClick={(e) => openProfile(dm, e)}>{dm.display_name}</span>
@@ -173,16 +181,22 @@ export function Chat(props: {
           </>
         )}
         <div className="topbar-end">
-          {onCall && <button className="icon small" title={`Ligar para ${dm?.display_name ?? ''}`} onClick={onCall}><Phone size={18} /></button>}
+          {onCall && <button className="icon small" title={group ? 'Começar chamada do grupo' : `Ligar para ${dm?.display_name ?? ''}`} onClick={onCall}><Phone size={18} /></button>}
           <button className={`icon small ${panel === 'pins' ? 'on' : ''}`} title="Mensagens fixadas" onClick={() => setPanel((p) => (p === 'pins' ? null : 'pins'))}><Pin size={18} /></button>
-          <SearchBox guild={guild} label={dm ? 'Buscar na conversa' : undefined} onResults={() => setPanel('search')} />
+          <SearchBox guild={guild} label={dm || group ? 'Buscar na conversa' : undefined} onResults={() => setPanel('search')} />
         </div>
       </header>
       <div className="chat-main">
         <div className="chat-column">
           <div className="messages" ref={listRef} onScroll={onScroll}>
             {!hasMore &&
-              (dm ? (
+              (group ? (
+                <div className="channel-start dm-start">
+                  <span className="group-icon placeholder" style={{ width: 72, height: 72 }}><Users size={40} /></span>
+                  <h2>{group}</h2>
+                  <p>Este é o começo do grupo. Chame mais amigos pelo botão Adicionar ao lado.</p>
+                </div>
+              ) : dm ? (
                 <div className="channel-start dm-start">
                   <Avatar user={dm} size={72} />
                   <h2>{dm.display_name}</h2>
@@ -197,7 +211,14 @@ export function Chat(props: {
               return (
                 <div key={m.id}>
                   {m.id === firstNew && <div className="new-divider"><span>NOVAS</span></div>}
-                  <MessageRow
+                  {state.relationships[m.author.id]?.type === 'blocked' && !shownBlocked.has(m.id) ? (
+                    prev && state.relationships[prev.author.id]?.type === 'blocked' && !shownBlocked.has(prev.id) ? null : (
+                      <div className="blocked-msg">
+                        <Ban size={14} /> Mensagem de alguém que você bloqueou.
+                        <button className="link" onClick={() => setShownBlocked((x) => new Set([...x, ...blockedRun(messages, i, state)]))}>Mostrar</button>
+                      </div>
+                    )
+                  ) : <MessageRow
                     msg={m}
                     grouped={!!grouped}
                     mine={m.author.id === me.id}
@@ -207,7 +228,7 @@ export function Chat(props: {
                     color={nameColor(guild, m.author.id)}
                     onReply={() => (setReplyTo(m), composer.current?.focus())}
                     onJump={jump}
-                  />
+                  />}
                 </div>
               );
             })}
@@ -218,7 +239,7 @@ export function Chat(props: {
             apiRef={composer}
             channel={channel}
             canAttach={canAttach}
-            placeholder={dm ? `Conversar com @${dm.display_name}` : undefined}
+            placeholder={group ? `Conversar em ${group}` : dm ? `Conversar com @${dm.display_name}` : undefined}
             members={members}
             me={me}
             replyTo={replyTo}
@@ -852,4 +873,11 @@ function SearchPanel({ guild, members, me, onJump, onClose }: { guild: Guild; me
       </div>
     </aside>
   );
+}
+
+/** Mensagens seguidas de pessoas bloqueadas a partir da posição i (o "Mostrar" abre todas juntas). */
+function blockedRun(messages: Message[], i: number, state: State) {
+  const ids: string[] = [];
+  for (let j = i; j < messages.length && state.relationships[messages[j].author.id]?.type === 'blocked'; j++) ids.push(messages[j].id);
+  return ids;
 }
