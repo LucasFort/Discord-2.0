@@ -62,8 +62,9 @@ export function Chat(props: {
   dm?: User; // conversa direta: a outra pessoa (o topo e os textos mostram o nome dela)
   group?: string; // grupo: o nome dele
   onCall?: () => void;
+  onMembers?: () => void; // celular: abre a lista de membros
 }) {
-  const { channel, guild, state, dispatch, gateway, onOpenChannel, dm, group, onCall } = props;
+  const { channel, guild, state, dispatch, gateway, onOpenChannel, dm, group, onCall, onMembers } = props;
   const messages = state.messages[channel.id];
   const me = state.user!;
   const [shownBlocked, setShownBlocked] = useState<Set<string>>(new Set());
@@ -184,6 +185,7 @@ export function Chat(props: {
           {onCall && <button className="icon small" title={group ? 'Começar chamada do grupo' : `Ligar para ${dm?.display_name ?? ''}`} onClick={onCall}><Phone size={18} /></button>}
           <button className={`icon small ${panel === 'pins' ? 'on' : ''}`} title="Mensagens fixadas" onClick={() => setPanel((p) => (p === 'pins' ? null : 'pins'))}><Pin size={18} /></button>
           <SearchBox guild={guild} label={dm || group ? 'Buscar na conversa' : undefined} onResults={() => setPanel('search')} />
+          {onMembers && <button className="icon small mobile-only" title="Membros" onClick={onMembers}><Users size={18} /></button>}
         </div>
       </header>
       <div className="chat-main">
