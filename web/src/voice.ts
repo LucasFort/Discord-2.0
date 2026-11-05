@@ -554,6 +554,13 @@ export function useVoice(gateway: Gateway) {
         // Uma única camada em qualidade cheia: quem assiste não cai para uma versão borrada.
         simulcast: false,
         screenShareEncoding: { maxBitrate: bitrate, maxFramerate: opts.fps, priority: 'high' },
+        // Som da transmissão (navegador e app sem a captura nativa): sem estas opções ele herdava as
+        // da voz (mono, 64 kbps e DTX cortando o "silêncio"), o que deixava música e jogo abafados
+        // e picotados. Agora vai como música: estéreo, 128 kbps, sem DTX nem RED.
+        dtx: false,
+        red: false,
+        forceStereo: true,
+        audioPreset: { maxBitrate: 128_000 },
         // Equilibrado: divide a perda entre resolução e fps.
         // Jogo/vídeo: segura o fps e reduz a resolução quando a internet ou a CPU não dão conta.
         degradationPreference: opts.optimizeFor === 'detail' ? 'balanced' : 'maintain-framerate',
