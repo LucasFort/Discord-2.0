@@ -65,7 +65,7 @@ Sem Docker: baixe o binário em https://github.com/livekit/livekit/releases e ro
 
 ## Colocar online (Render + LiveKit Cloud, plano grátis)
 
-Em produção a API também entrega o site, então é um único serviço (veja o `Dockerfile`). Voz e tela ficam no LiveKit Cloud.
+Em produção a API também entrega o site, então é um único serviço (veja o `Dockerfile`). Voz e tela ficam num servidor LiveKit: o LiveKit Cloud (passo 1) ou, de graça e sem limite de minutos, um servidor próprio numa VM grátis da Oracle Cloud (veja [`voz/README.md`](voz/README.md)).
 
 1. **LiveKit Cloud:** crie uma conta em https://cloud.livekit.io e um projeto. Em *Settings > Keys* crie uma chave e anote três valores: a URL do projeto (começa com `wss://`), a API Key e o API Secret.
 2. **Render:** crie uma conta em https://render.com entrando com o GitHub. Clique em **New > Blueprint**, escolha o repositório `Discord-2.0` e confirme. O Render lê o `render.yaml` e pede `LIVEKIT_URL`, `LIVEKIT_API_KEY` e `LIVEKIT_API_SECRET`: cole os valores do passo 1.

@@ -21,7 +21,7 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
-      - key: LIVEKIT_URL      # do LiveKit Cloud, começa com wss://
+      - key: LIVEKIT_URL      # LiveKit Cloud ou servidor próprio (voz/README.md), começa com wss://
         sync: false
       - key: LIVEKIT_API_KEY
         sync: false
