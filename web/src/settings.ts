@@ -104,8 +104,9 @@ const DEFAULTS: Settings = {
   soundVolume: 100,
   soundsOff: {},
   soundPack: 'signature',
-  streamResolution: 'native',
-  streamFps: 60,
+  // Leve por padrão: 1080p/1440p a 60 fps gasta até 8x mais internet (e acaba com o plano grátis do LiveKit).
+  streamResolution: '720',
+  streamFps: 30,
   streamOptimize: 'motion',
   streamAudio: true,
   streamCodec: 'h264',
@@ -147,7 +148,7 @@ const KEY = 'nexo.settings';
  * trocado para quem já tinha o Nexo (a pessoa ainda pode escolher de novo depois).
  * 2: supressão "Máxima" (IA duas vezes) deixava um barulho estranho/robótico na voz -> volta para "Forte".
  */
-const VERSION = 4;
+const VERSION = 5;
 
 function load(): Settings {
   try {
@@ -157,6 +158,8 @@ function load(): Settings {
     if ((saved._v ?? 1) < 3) Object.assign(saved, { echoCancellation: true, echoGate: true });
     // v4: sons novos com a assinatura do Nexo para todo mundo (dá para voltar nas configurações).
     if ((saved._v ?? 1) < 4) saved.soundPack = 'signature';
+    // v5: transmissão volta para 720p 30 fps para todo mundo (gasta bem menos do plano grátis de voz).
+    if ((saved._v ?? 1) < 5) Object.assign(saved, { streamResolution: '720', streamFps: 30 });
     saved._v = VERSION;
     return { ...DEFAULTS, ...saved };
   } catch {
